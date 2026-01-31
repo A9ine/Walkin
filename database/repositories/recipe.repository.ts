@@ -54,8 +54,8 @@ export class RecipeRepository {
       for (let i = 0; i < recipe.issues.length; i++) {
         const issue = recipe.issues[i];
         await database.runAsync(
-          `INSERT INTO recipe_issues (id, recipe_id, type, message, ingredient_name, suggested_fix)
-           VALUES (?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO recipe_issues (id, recipe_id, type, message, ingredient_name, suggested_fix, duplicate_indices)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
           [
             `${recipe.id}_issue_${i}`,
             recipe.id,
@@ -63,6 +63,7 @@ export class RecipeRepository {
             issue.message,
             issue.ingredientName || null,
             issue.suggestedFix || null,
+            issue.duplicateIndices ? JSON.stringify(issue.duplicateIndices) : null,
           ]
         );
       }
@@ -152,6 +153,82 @@ export class RecipeRepository {
   }
 
   /**
+   * Update an existing recipe
+   */
+  async updateRecipe(recipe: Recipe): Promise<void> {
+    const database = db.getDB();
+
+    try {
+      await database.runAsync('BEGIN TRANSACTION');
+
+      // Update recipe
+      await database.runAsync(
+        `UPDATE recipes SET name = ?, status = ?, confidence = ?, source_type = ?, source_uri = ?, source_content = ?, pos_menu_item_id = ?, last_updated = ?
+         WHERE id = ?`,
+        [
+          recipe.name,
+          recipe.status,
+          recipe.confidence,
+          recipe.source.type,
+          recipe.source.uri || null,
+          recipe.source.content || null,
+          recipe.posMenuItemId || null,
+          recipe.lastUpdated.getTime(),
+          recipe.id,
+        ]
+      );
+
+      // Delete existing ingredients and re-insert
+      await database.runAsync('DELETE FROM ingredients WHERE recipe_id = ?', [recipe.id]);
+
+      for (let i = 0; i < recipe.ingredients.length; i++) {
+        const ing = recipe.ingredients[i];
+        await database.runAsync(
+          `INSERT INTO ingredients (id, recipe_id, name, quantity, unit, pos_ingredient_id, is_new, confidence, order_index)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            `${recipe.id}_ing_${i}`,
+            recipe.id,
+            ing.name,
+            ing.quantity,
+            ing.unit,
+            ing.posIngredientId || null,
+            ing.isNew ? 1 : 0,
+            ing.confidence || null,
+            i,
+          ]
+        );
+      }
+
+      // Delete existing issues and re-insert
+      await database.runAsync('DELETE FROM recipe_issues WHERE recipe_id = ?', [recipe.id]);
+
+      for (let i = 0; i < recipe.issues.length; i++) {
+        const issue = recipe.issues[i];
+        await database.runAsync(
+          `INSERT INTO recipe_issues (id, recipe_id, type, message, ingredient_name, suggested_fix, duplicate_indices)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          [
+            `${recipe.id}_issue_${i}`,
+            recipe.id,
+            issue.type,
+            issue.message,
+            issue.ingredientName || null,
+            issue.suggestedFix || null,
+            issue.duplicateIndices ? JSON.stringify(issue.duplicateIndices) : null,
+          ]
+        );
+      }
+
+      await database.runAsync('COMMIT');
+    } catch (error) {
+      await database.runAsync('ROLLBACK');
+      console.error('Failed to update recipe:', error);
+      throw error;
+    }
+  }
+
+  /**
    * Delete recipe
    */
   async deleteRecipe(id: string): Promise<void> {
@@ -171,15 +248,38 @@ export class RecipeRepository {
       [row.id]
     );
 
-    const ingredients: Ingredient[] = ingredientRows.map((ing: any) => ({
-      name: ing.name,
-      quantity: ing.quantity,
-      unit: ing.unit,
-      posIngredientId: ing.pos_ingredient_id,
-      isNew: ing.is_new === 1,
-      confidence: ing.confidence,
-      issues: [],
-    }));
+    // Validate that referenced POS ingredients still exist
+    const ingredients: Ingredient[] = [];
+    for (const ing of ingredientRows) {
+      let posIngredientId = ing.pos_ingredient_id;
+      let isNew = ing.is_new === 1;
+      let confidence = ing.confidence;
+
+      // If there's a posIngredientId reference, verify it still exists
+      if (posIngredientId) {
+        const posIngExists = await database.getFirstAsync<{ id: string }>(
+          'SELECT id FROM pos_ingredients WHERE id = ?',
+          [posIngredientId]
+        );
+
+        if (!posIngExists) {
+          // Referenced ingredient was deleted - clear the reference
+          posIngredientId = undefined;
+          isNew = true;
+          confidence = 'low';
+        }
+      }
+
+      ingredients.push({
+        name: ing.name,
+        quantity: ing.quantity,
+        unit: ing.unit,
+        posIngredientId,
+        isNew,
+        confidence,
+        issues: [],
+      });
+    }
 
     // Get issues
     const issueRows = await database.getAllAsync<any>(
@@ -192,13 +292,56 @@ export class RecipeRepository {
       message: issue.message,
       ingredientName: issue.ingredient_name,
       suggestedFix: issue.suggested_fix,
+      duplicateIndices: issue.duplicate_indices ? JSON.parse(issue.duplicate_indices) : undefined,
     }));
+
+    // Add issues for ingredients with broken references (deleted from inventory)
+    for (const ing of ingredients) {
+      if (!ing.posIngredientId && ing.name) {
+        // Check if there's already an ingredient_not_found issue for this ingredient
+        const existingIssue = issues.find(
+          i => i.type === 'ingredient_not_found' && i.ingredientName === ing.name
+        );
+        if (!existingIssue) {
+          issues.push({
+            type: 'ingredient_not_found',
+            message: `"${ing.name}" is not linked to your inventory`,
+            ingredientName: ing.name,
+            suggestedFix: `Select a matching ingredient from inventory or add "${ing.name}" as new`,
+          });
+        }
+      }
+    }
+
+    // Recalculate status and confidence based on current ingredient state
+    const unmatchedCount = ingredients.filter(ing => !ing.posIngredientId).length;
+    const totalIngredients = ingredients.length;
+
+    let status = row.status;
+    let confidence = row.confidence;
+
+    // Update status if ingredients have become unmatched
+    if (unmatchedCount > 0 && status === 'ready_to_import') {
+      status = 'needs_review';
+    }
+
+    // Recalculate confidence
+    if (totalIngredients > 0) {
+      const matchRate = (totalIngredients - unmatchedCount) / totalIngredients;
+      if (matchRate >= 0.9 && unmatchedCount === 0) {
+        confidence = 'high';
+      } else if (matchRate >= 0.7) {
+        confidence = 'medium';
+      } else {
+        confidence = 'low';
+      }
+    }
 
     return {
       id: row.id,
       name: row.name,
-      status: row.status,
-      confidence: row.confidence,
+      status,
+      confidence,
       lastUpdated: new Date(row.last_updated),
       source: {
         type: row.source_type,

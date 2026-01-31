@@ -4,6 +4,35 @@
  */
 
 export const SCHEMA = {
+  // User profile cache (for offline access)
+  USER_PROFILES: `
+    CREATE TABLE IF NOT EXISTS user_profiles (
+      id TEXT PRIMARY KEY NOT NULL,
+      firebase_uid TEXT UNIQUE NOT NULL,
+      email TEXT NOT NULL,
+      display_name TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+  `,
+
+  // POS connections linked to users
+  USER_POS_CONNECTIONS: `
+    CREATE TABLE IF NOT EXISTS user_pos_connections (
+      id TEXT PRIMARY KEY NOT NULL,
+      user_id TEXT NOT NULL,
+      provider TEXT NOT NULL,
+      location_id TEXT NOT NULL,
+      location_name TEXT NOT NULL,
+      access_token_ref TEXT,
+      refresh_token_ref TEXT,
+      is_active INTEGER DEFAULT 1,
+      last_synced_at INTEGER,
+      created_at INTEGER NOT NULL,
+      FOREIGN KEY (user_id) REFERENCES user_profiles(firebase_uid)
+    );
+  `,
+
   // Recipes table
   RECIPES: `
     CREATE TABLE IF NOT EXISTS recipes (
@@ -41,10 +70,11 @@ export const SCHEMA = {
     CREATE TABLE IF NOT EXISTS recipe_issues (
       id TEXT PRIMARY KEY NOT NULL,
       recipe_id TEXT NOT NULL,
-      type TEXT NOT NULL CHECK(type IN ('unit_unclear', 'ingredient_not_found', 'similar_ingredient', 'missing_data', 'import_failed')),
+      type TEXT NOT NULL CHECK(type IN ('unit_unclear', 'ingredient_not_found', 'similar_ingredient', 'missing_data', 'import_failed', 'duplicate_ingredient')),
       message TEXT NOT NULL,
       ingredient_name TEXT,
       suggested_fix TEXT,
+      duplicate_indices TEXT,
       FOREIGN KEY (recipe_id) REFERENCES recipes(id) ON DELETE CASCADE
     );
   `,
@@ -69,6 +99,18 @@ export const SCHEMA = {
       id TEXT PRIMARY KEY NOT NULL,
       pos_ingredient_id TEXT NOT NULL,
       alias TEXT NOT NULL,
+      FOREIGN KEY (pos_ingredient_id) REFERENCES pos_ingredients(id) ON DELETE CASCADE
+    );
+  `,
+
+  // POS Ingredient Supported Units
+  POS_INGREDIENT_UNITS: `
+    CREATE TABLE IF NOT EXISTS pos_ingredient_units (
+      id TEXT PRIMARY KEY NOT NULL,
+      pos_ingredient_id TEXT NOT NULL,
+      unit TEXT NOT NULL,
+      conversion_factor REAL NOT NULL DEFAULT 1,
+      is_base_unit INTEGER NOT NULL DEFAULT 0,
       FOREIGN KEY (pos_ingredient_id) REFERENCES pos_ingredients(id) ON DELETE CASCADE
     );
   `,
@@ -104,6 +146,8 @@ export const SCHEMA = {
 
   // Indexes for performance
   INDEXES: [
+    'CREATE INDEX IF NOT EXISTS idx_user_profiles_firebase_uid ON user_profiles(firebase_uid);',
+    'CREATE INDEX IF NOT EXISTS idx_user_pos_connections_user_id ON user_pos_connections(user_id);',
     'CREATE INDEX IF NOT EXISTS idx_recipes_status ON recipes(status);',
     'CREATE INDEX IF NOT EXISTS idx_recipes_confidence ON recipes(confidence);',
     'CREATE INDEX IF NOT EXISTS idx_ingredients_recipe_id ON ingredients(recipe_id);',

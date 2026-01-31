@@ -1,4 +1,3 @@
-import { TopBar } from '@/components/TopBar';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { useRecipes } from '@/hooks/database/useRecipes';
 import type { Recipe } from '@/types/recipe';
@@ -58,9 +57,8 @@ export default function InboxScreen() {
 
   if (loading) {
     return (
-      <SafeAreaView style={styles.container} edges={['bottom']}>
-        <TopBar />
-        <View style={[styles.content, styles.centerContent]}>
+      <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
+                <View style={[styles.content, styles.centerContent]}>
           <ActivityIndicator size="large" color="#2196f3" />
           <Text style={styles.loadingText}>Loading recipes...</Text>
         </View>
@@ -70,9 +68,8 @@ export default function InboxScreen() {
 
   if (error) {
     return (
-      <SafeAreaView style={styles.container} edges={['bottom']}>
-        <TopBar />
-        <View style={[styles.content, styles.centerContent]}>
+      <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
+                <View style={[styles.content, styles.centerContent]}>
           <Text style={styles.errorText}>Error loading recipes: {error.message}</Text>
         </View>
       </SafeAreaView>
@@ -80,9 +77,8 @@ export default function InboxScreen() {
   }
 
   return (
-    <SafeAreaView style={styles.container} edges={['bottom']}>
-      <TopBar />
-
+    <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
+      
       <View style={styles.content}>
         <Text style={styles.title}>Inbox</Text>
         <Text style={styles.subtitle}>Review and import your recipes</Text>
@@ -142,7 +138,7 @@ export default function InboxScreen() {
         <FlatList
           data={getFilteredRecipes()}
           keyExtractor={(item) => item.id}
-          renderItem={({ item }) => <RecipeCard recipe={item} onPress={() => {}} />}
+          renderItem={({ item }) => <RecipeCard recipe={item} onPress={() => router.push({ pathname: '/recipe-detail', params: { recipeId: item.id } })} />}
           contentContainerStyle={styles.list}
           showsVerticalScrollIndicator={false}
         />
@@ -172,6 +168,56 @@ function RecipeCard({ recipe, onPress }: { recipe: Recipe; onPress: () => void }
     return <View style={[styles.confidenceBadge, { backgroundColor: '#f44336' }]} />;
   };
 
+  // Group issues by type for clearer display
+  const getIssuesSummary = () => {
+    const unitIssues = recipe.issues.filter(i => i.type === 'unit_unclear');
+    const notFoundIssues = recipe.issues.filter(i => i.type === 'ingredient_not_found');
+    const similarIssues = recipe.issues.filter(i => i.type === 'similar_ingredient');
+    const duplicateIssues = recipe.issues.filter(i => i.type === 'duplicate_ingredient');
+
+    const summary: { icon: string; color: string; label: string; ingredients: string[] }[] = [];
+
+    if (duplicateIssues.length > 0) {
+      summary.push({
+        icon: 'doc.on.doc.fill',
+        color: '#9c27b0',
+        label: 'Duplicates found',
+        ingredients: duplicateIssues.map(i => i.ingredientName || 'Unknown').filter(Boolean),
+      });
+    }
+
+    if (unitIssues.length > 0) {
+      summary.push({
+        icon: 'questionmark.circle.fill',
+        color: '#ff9800',
+        label: 'Unclear units',
+        ingredients: unitIssues.map(i => i.ingredientName || 'Unknown').filter(Boolean),
+      });
+    }
+
+    if (notFoundIssues.length > 0) {
+      summary.push({
+        icon: 'magnifyingglass',
+        color: '#f44336',
+        label: 'Not in inventory',
+        ingredients: notFoundIssues.map(i => i.ingredientName || 'Unknown').filter(Boolean),
+      });
+    }
+
+    if (similarIssues.length > 0) {
+      summary.push({
+        icon: 'arrow.triangle.2.circlepath',
+        color: '#2196f3',
+        label: 'Verify match',
+        ingredients: similarIssues.map(i => i.ingredientName || 'Unknown').filter(Boolean),
+      });
+    }
+
+    return summary;
+  };
+
+  const issuesSummary = getIssuesSummary();
+
   return (
     <TouchableOpacity style={styles.card} onPress={onPress}>
       <View style={styles.cardHeader}>
@@ -195,10 +241,19 @@ function RecipeCard({ recipe, onPress }: { recipe: Recipe; onPress: () => void }
         </View>
       </View>
 
-      {recipe.issues.length > 0 && (
-        <View style={styles.issuesContainer}>
-          <IconSymbol name="exclamationmark.triangle.fill" size={14} color="#ff9800" />
-          <Text style={styles.issuesText}>{recipe.issues.length} issue(s) to resolve</Text>
+      {issuesSummary.length > 0 && (
+        <View style={styles.issuesSection}>
+          {issuesSummary.map((issue, index) => (
+            <View key={index} style={[styles.issueRow, { backgroundColor: issue.color + '10' }]}>
+              <View style={styles.issueHeader}>
+                <IconSymbol name={issue.icon} size={14} color={issue.color} />
+                <Text style={[styles.issueLabel, { color: issue.color }]}>{issue.label}:</Text>
+              </View>
+              <Text style={styles.issueIngredients} numberOfLines={2}>
+                {issue.ingredients.join(', ')}
+              </Text>
+            </View>
+          ))}
         </View>
       )}
     </TouchableOpacity>
@@ -345,17 +400,27 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#666',
   },
-  issuesContainer: {
+  issuesSection: {
+    marginTop: 12,
+    gap: 8,
+  },
+  issueRow: {
+    padding: 10,
+    borderRadius: 8,
+  },
+  issueHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    marginTop: 12,
-    padding: 10,
-    backgroundColor: '#fff3e0',
-    borderRadius: 6,
+    marginBottom: 4,
   },
-  issuesText: {
+  issueLabel: {
     fontSize: 12,
-    color: '#e65100',
+    fontWeight: '600',
+  },
+  issueIngredients: {
+    fontSize: 12,
+    color: '#666',
+    marginLeft: 20,
   },
 });

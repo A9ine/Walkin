@@ -1,5 +1,4 @@
 import { IconSymbol } from '@/components/ui/icon-symbol';
-import { TopBar } from '@/components/TopBar';
 import { DatabaseService } from '@/database/db.service';
 import { recipeRepository } from '@/database/repositories/recipe.repository';
 import { usePOSIngredients } from '@/hooks/database/usePOSIngredients';
@@ -289,9 +288,8 @@ export default function MenuItemDetailScreen() {
 
   if (loading) {
     return (
-      <SafeAreaView style={styles.container} edges={['bottom']}>
-        <TopBar />
-        <View style={[styles.content, styles.centerContent]}>
+      <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
+                <View style={[styles.content, styles.centerContent]}>
           <ActivityIndicator size="large" color="#2196f3" />
           <Text style={styles.loadingText}>Loading...</Text>
         </View>
@@ -300,9 +298,8 @@ export default function MenuItemDetailScreen() {
   }
 
   return (
-    <SafeAreaView style={styles.container} edges={['bottom']}>
-      <TopBar />
-      <View style={styles.content}>
+    <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
+            <View style={styles.content}>
         {/* Header */}
         <View style={styles.header}>
           <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>

@@ -1,4 +1,3 @@
-import { TopBar } from '@/components/TopBar';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { usePOSIngredients } from '@/hooks/database/usePOSIngredients';
 import { useRecipes } from '@/hooks/database/useRecipes';
@@ -193,9 +192,8 @@ export default function TextImportScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.container} edges={['bottom']}>
-      <TopBar />
-
+    <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
+      
       <ScrollView style={styles.content} keyboardShouldPersistTaps="handled">
         <View style={styles.header}>
           <Text style={styles.title}>Manual Recipe Entry</Text>

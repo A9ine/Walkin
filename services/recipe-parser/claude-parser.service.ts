@@ -188,6 +188,35 @@ Return ONLY the JSON, no other text.`;
   }
 
   /**
+   * Find exact match for ingredient in POS list (case-insensitive)
+   * Checks both ingredient names and aliases
+   * Returns the matched ingredient for 100% matches (auto-linking)
+   */
+  private findExactMatch(ingredientName: string, posIngredients: POSIngredient[]): POSIngredient | null {
+    const normalizedName = ingredientName.trim().toLowerCase();
+
+    for (const posIng of posIngredients) {
+      // Check exact match on name (100% match)
+      if (posIng.name.trim().toLowerCase() === normalizedName) {
+        console.log(`Auto-matched ingredient: "${ingredientName}" -> "${posIng.name}" (exact name match)`);
+        return posIng;
+      }
+
+      // Check exact match on aliases (100% match)
+      if (posIng.aliases) {
+        for (const alias of posIng.aliases) {
+          if (alias.trim().toLowerCase() === normalizedName) {
+            console.log(`Auto-matched ingredient: "${ingredientName}" -> "${posIng.name}" (via alias "${alias}")`);
+            return posIng;
+          }
+        }
+      }
+    }
+
+    return null;
+  }
+
+  /**
    * Build Recipe object from parsed data
    */
   private buildRecipeFromParsedData(
@@ -198,31 +227,68 @@ Return ONLY the JSON, no other text.`;
     const now = new Date();
     const recipeId = this.generateId();
 
-    // Process ingredients
-    const ingredients: Ingredient[] = parsedData.ingredients.map((ing: any) => {
-      const matchedPOS = posIngredients.find((pos) => pos.name === ing.matchedPOSIngredient);
+    // Process ingredients with tracking for exact matches
+    const ingredientData: Array<{ ingredient: Ingredient; isExactMatch: boolean; originalName: string }> =
+      parsedData.ingredients.map((ing: any) => {
+        // First check if Claude found a match
+        let matchedPOS = posIngredients.find((pos) => pos.name === ing.matchedPOSIngredient);
+        let isExactMatch = false;
 
-      return {
-        name: ing.name,
-        quantity: ing.quantity,
-        unit: ing.unit,
-        posIngredientId: matchedPOS?.id,
-        isNew: !matchedPOS,
-        confidence: ing.confidence,
-        issues: ing.issues || [],
-      };
-    });
+        // If Claude didn't find a match, try our own exact match (case-insensitive)
+        if (!matchedPOS) {
+          matchedPOS = this.findExactMatch(ing.name, posIngredients) || undefined;
+          // Our findExactMatch only returns exact matches (100%)
+          if (matchedPOS) {
+            isExactMatch = true;
+          }
+        } else {
+          // Check if Claude's match is actually an exact match
+          const normalizedIngName = ing.name.trim().toLowerCase();
+          const normalizedPosName = matchedPOS.name.trim().toLowerCase();
+          isExactMatch = normalizedIngName === normalizedPosName ||
+            (matchedPOS.aliases?.some((a: string) => a.trim().toLowerCase() === normalizedIngName) ?? false);
+        }
 
-    // Determine overall issues
+        return {
+          ingredient: {
+            name: matchedPOS ? matchedPOS.name : ing.name, // Use POS name if matched for consistency
+            quantity: ing.quantity,
+            unit: matchedPOS ? matchedPOS.unit : ing.unit, // Use POS unit if matched
+            posIngredientId: matchedPOS?.id,
+            isNew: !matchedPOS,
+            confidence: isExactMatch ? 'high' : (matchedPOS ? 'medium' : ing.confidence), // High confidence for exact match
+            issues: isExactMatch ? [] : (ing.issues || []), // Clear issues for exact matches
+          } as Ingredient,
+          isExactMatch,
+          originalName: ing.name,
+        };
+      });
+
+    const ingredients: Ingredient[] = ingredientData.map(d => d.ingredient);
+
+    // Determine overall issues (skip issues for exact matches)
     const issues: RecipeIssue[] = [];
 
-    ingredients.forEach((ing) => {
+    ingredientData.forEach(({ ingredient: ing, isExactMatch, originalName }) => {
+      // Skip all issues for exact (100%) matches - they're auto-linked
+      if (isExactMatch) {
+        return;
+      }
+
       if (ing.isNew) {
         issues.push({
           type: 'ingredient_not_found',
           message: `Ingredient "${ing.name}" not found in POS system`,
           ingredientName: ing.name,
           suggestedFix: 'Create new ingredient or match to existing',
+        });
+      } else if (originalName.toLowerCase() !== ing.name.toLowerCase()) {
+        // Fuzzy match - add similar_ingredient issue
+        issues.push({
+          type: 'similar_ingredient',
+          message: `"${originalName}" matched to "${ing.name}" - verify this is correct`,
+          ingredientName: ing.name,
+          suggestedFix: `Verify that "${originalName}" should be "${ing.name}"`,
         });
       }
 

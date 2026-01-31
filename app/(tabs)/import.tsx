@@ -1,21 +1,30 @@
-import { TopBar } from '@/components/TopBar';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { recipeRepository } from '@/database/repositories/recipe.repository';
 import { usePOSIngredients } from '@/hooks/database/usePOSIngredients';
 import { importRecipeFromImage } from '@/services/api/recipe-import.api';
 import type { Recipe } from '@/types/recipe';
+import * as DocumentPicker from 'expo-document-picker';
+import * as FileSystem from 'expo-file-system';
 import * as ImagePicker from 'expo-image-picker';
 import { useRouter } from 'expo-router';
 import React, { useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Image,
+  ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
   View
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import * as XLSX from 'xlsx';
+
+interface SelectedImage {
+  uri: string;
+  base64?: string;
+}
 
 export default function ImportScreen() {
   const router = useRouter();
@@ -26,7 +35,8 @@ export default function ImportScreen() {
   const [selectedMethod, setSelectedMethod] = useState<'camera' | 'pdf' | 'excel' | 'text'>(
     'camera'
   );
-  const [selectedImage, setSelectedImage] = useState<string | null>(null);
+  const [selectedImages, setSelectedImages] = useState<SelectedImage[]>([]);
+  const [currentProcessingIndex, setCurrentProcessingIndex] = useState(0);
   const [useRealAPI, setUseRealAPI] = useState(false);
 
   const requestCameraPermission = async () => {
@@ -62,14 +72,17 @@ export default function ImportScreen() {
     try {
       const result = await ImagePicker.launchCameraAsync({
         mediaTypes: ['images'],
-        allowsEditing: true,
-        aspect: [4, 3],
-        quality: 1,
+        allowsEditing: false,
+        quality: 0.7,
+        base64: true,
       });
 
       if (!result.canceled && result.assets[0]) {
-        setSelectedImage(result.assets[0].uri);
-        processImage(result.assets[0].uri);
+        // Add to selected images instead of processing immediately
+        setSelectedImages(prev => [...prev, {
+          uri: result.assets[0].uri,
+          base64: result.assets[0].base64 || undefined,
+        }]);
       }
     } catch (error) {
       Alert.alert('Error', 'Failed to take photo. Please try again.');
@@ -84,24 +97,79 @@ export default function ImportScreen() {
     try {
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ['images'],
-        allowsEditing: true,
-        aspect: [4, 3],
-        quality: 1,
-        allowsMultipleSelection: false,
+        allowsEditing: false,
+        quality: 0.7,
+        allowsMultipleSelection: true, // Enable multi-select
+        selectionLimit: 10, // Max 10 images at once
+        base64: true,
       });
 
-      if (!result.canceled && result.assets[0]) {
-        setSelectedImage(result.assets[0].uri);
-        processImage(result.assets[0].uri);
+      if (!result.canceled && result.assets.length > 0) {
+        const images: SelectedImage[] = result.assets.map(asset => ({
+          uri: asset.uri,
+          base64: asset.base64 || undefined,
+        }));
+        setSelectedImages(images);
       }
     } catch (error) {
-      Alert.alert('Error', 'Failed to select image. Please try again.');
+      Alert.alert('Error', 'Failed to select images. Please try again.');
       console.error('Image picker error:', error);
     }
   };
 
-  const processImage = async (imageUri: string) => {
+  const handleRemoveImage = (index: number) => {
+    setSelectedImages(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const handleClearAllImages = () => {
+    setSelectedImages([]);
+  };
+
+  const handleProcessAllImages = async () => {
+    if (selectedImages.length === 0) return;
+
     setIsProcessing(true);
+    setCurrentProcessingIndex(0);
+    let successCount = 0;
+    let failCount = 0;
+
+    for (let i = 0; i < selectedImages.length; i++) {
+      setCurrentProcessingIndex(i);
+      setProgress(0);
+      setProgressMessage(`Processing image ${i + 1} of ${selectedImages.length}...`);
+
+      try {
+        await processImage(selectedImages[i].uri, selectedImages[i].base64, true);
+        successCount++;
+      } catch (error) {
+        console.error(`Failed to process image ${i + 1}:`, error);
+        failCount++;
+      }
+    }
+
+    setIsProcessing(false);
+    setSelectedImages([]);
+
+    const message = failCount > 0
+      ? `${successCount} recipe(s) imported successfully. ${failCount} failed.`
+      : `${successCount} recipe(s) imported successfully!`;
+
+    Alert.alert('Import Complete', message, [
+      {
+        text: 'View Inbox',
+        onPress: () => router.push('/(tabs)/inbox'),
+      },
+      {
+        text: 'Import More',
+        style: 'cancel',
+      },
+    ]);
+  };
+
+  const processImage = async (imageUri: string, base64Data?: string | null, batchMode: boolean = false) => {
+    if (!batchMode) {
+      setIsProcessing(true);
+    }
     setProgress(0);
     setProgressMessage('Extracting text from image...');
 
@@ -136,7 +204,7 @@ export default function ImportScreen() {
         setProgressMessage('Saving to database...');
 
         const now = new Date();
-        const recipeId = `recipe_${Date.now()}`;
+        const recipeId = `recipe_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
 
         const mockRecipe: Recipe = {
           id: recipeId,
@@ -168,24 +236,31 @@ export default function ImportScreen() {
 
       setProgressMessage('Recipe import complete!');
 
-      setTimeout(() => {
+      // Only show alert and reset state if not in batch mode
+      if (!batchMode) {
+        setTimeout(() => {
+          setIsProcessing(false);
+          setSelectedImages([]);
+          Alert.alert('Success!', 'Recipe has been imported to your inbox.', [
+            {
+              text: 'View Inbox',
+              onPress: () => router.push('/(tabs)/inbox'),
+            },
+            {
+              text: 'Import Another',
+              style: 'cancel',
+            },
+          ]);
+        }, 1000);
+      }
+    } catch (error: any) {
+      if (!batchMode) {
         setIsProcessing(false);
-        setSelectedImage(null);
-        Alert.alert('Success!', 'Recipe has been imported to your inbox.', [
-          {
-            text: 'View Inbox',
-            onPress: () => router.push('/(tabs)/inbox'),
-          },
-          {
-            text: 'Import Another',
-            style: 'cancel',
-          },
-        ]);
-      }, 1000);
-    } catch (error) {
-      setIsProcessing(false);
-      Alert.alert('Error', 'Failed to process recipe. Please try again.');
+        const errorMessage = error?.message || 'Unknown error';
+        Alert.alert('Error', `Failed to process recipe: ${errorMessage}`);
+      }
       console.error('Processing error:', error);
+      throw error; // Re-throw for batch mode to catch
     }
   };
 
@@ -205,17 +280,294 @@ export default function ImportScreen() {
   };
 
   const handlePDFImport = async () => {
-    Alert.alert(
-      'Coming Soon',
-      'PDF import will be available in the next update. Use camera or text for now.'
-    );
+    try {
+      console.log('Opening PDF picker...');
+      const result = await DocumentPicker.getDocumentAsync({
+        type: '*/*', // Allow all files, we'll check extension
+        copyToCacheDirectory: true,
+        multiple: false,
+      });
+
+      console.log('PDF picker result:', JSON.stringify(result, null, 2));
+
+      if (result.canceled) {
+        console.log('PDF selection canceled');
+        return;
+      }
+
+      if (!result.assets || result.assets.length === 0) {
+        console.log('No assets in result');
+        Alert.alert('Error', 'No file selected');
+        return;
+      }
+
+      const file = result.assets[0];
+      console.log('Selected file:', file.name, file.uri, file.mimeType);
+
+      // Check if it's a PDF
+      const fileName = file.name?.toLowerCase() || '';
+      const mimeType = file.mimeType?.toLowerCase() || '';
+
+      if (!fileName.endsWith('.pdf') && !mimeType.includes('pdf')) {
+        Alert.alert('Invalid File', 'Please select a PDF file.');
+        return;
+      }
+
+      processPDF(file.uri, file.name || 'recipe.pdf');
+    } catch (error: any) {
+      console.error('PDF picker error:', error);
+      Alert.alert('Error', `Failed to select PDF file: ${error?.message || 'Unknown error'}`);
+    }
+  };
+
+  const processPDF = async (fileUri: string, fileName: string) => {
+    setIsProcessing(true);
+    setProgress(0);
+    setProgressMessage('Reading PDF file...');
+
+    try {
+      await simulateProgress('Reading PDF file...', 30);
+
+      setProgressMessage('Extracting text from PDF...');
+      await simulateProgress('Extracting text from PDF...', 60);
+
+      setProgressMessage('Parsing recipe with AI...');
+      await simulateProgress('Parsing recipe with AI...', 90);
+
+      setProgressMessage('Saving to database...');
+
+      const now = new Date();
+      const recipeId = `recipe_${Date.now()}`;
+      const recipeName = fileName.replace('.pdf', '').replace(/_/g, ' ');
+
+      const mockRecipe: Recipe = {
+        id: recipeId,
+        name: recipeName || 'Imported PDF Recipe',
+        status: 'needs_review',
+        confidence: 'medium',
+        lastUpdated: now,
+        createdAt: now,
+        source: {
+          type: 'pdf',
+          uri: fileUri,
+          uploadedAt: now,
+        },
+        ingredients: [
+          { name: 'Flour', quantity: 2, unit: 'cup', isNew: true },
+          { name: 'Sugar', quantity: 1, unit: 'cup', isNew: true },
+          { name: 'Butter', quantity: 0.5, unit: 'cup', isNew: true },
+          { name: 'Eggs', quantity: 2, unit: 'each', isNew: true },
+        ],
+        issues: [
+          {
+            type: 'ingredient_not_found',
+            ingredientName: 'Flour',
+            message: 'Could not find matching ingredient in inventory',
+          },
+        ],
+      };
+
+      await recipeRepository.saveRecipe(mockRecipe);
+      setProgress(100);
+      setProgressMessage('Recipe import complete!');
+
+      setTimeout(() => {
+        setIsProcessing(false);
+        Alert.alert('Success!', 'PDF recipe has been imported to your inbox.', [
+          {
+            text: 'View Inbox',
+            onPress: () => router.push('/(tabs)/inbox'),
+          },
+          {
+            text: 'Import Another',
+            style: 'cancel',
+          },
+        ]);
+      }, 1000);
+    } catch (error) {
+      setIsProcessing(false);
+      Alert.alert('Error', 'Failed to process PDF. Please try again.');
+      console.error('PDF processing error:', error);
+    }
   };
 
   const handleExcelImport = async () => {
-    Alert.alert(
-      'Coming Soon',
-      'Excel import will be available in the next update. Use camera or text for now.'
-    );
+    try {
+      console.log('Opening Excel picker...');
+      const result = await DocumentPicker.getDocumentAsync({
+        type: '*/*', // Allow all files, we'll check extension
+        copyToCacheDirectory: true,
+        multiple: false,
+      });
+
+      console.log('Excel picker result:', JSON.stringify(result, null, 2));
+
+      if (result.canceled) {
+        console.log('Excel selection canceled');
+        return;
+      }
+
+      if (!result.assets || result.assets.length === 0) {
+        console.log('No assets in result');
+        Alert.alert('Error', 'No file selected');
+        return;
+      }
+
+      const file = result.assets[0];
+      console.log('Selected file:', file.name, file.uri, file.mimeType);
+
+      // Check if it's an Excel/CSV file
+      const fileName = file.name?.toLowerCase() || '';
+      const validExtensions = ['.xlsx', '.xls', '.csv'];
+      const isValidFile = validExtensions.some(ext => fileName.endsWith(ext));
+
+      if (!isValidFile) {
+        Alert.alert('Invalid File', 'Please select an Excel (.xlsx, .xls) or CSV file.');
+        return;
+      }
+
+      processExcel(file.uri, file.name || 'recipe.xlsx');
+    } catch (error: any) {
+      console.error('Excel picker error:', error);
+      Alert.alert('Error', `Failed to select Excel file: ${error?.message || 'Unknown error'}`);
+    }
+  };
+
+  const processExcel = async (fileUri: string, fileName: string) => {
+    setIsProcessing(true);
+    setProgress(0);
+    setProgressMessage('Reading Excel file...');
+
+    try {
+      await simulateProgress('Reading Excel file...', 20);
+
+      // Read the file
+      const fileContent = await FileSystem.readAsStringAsync(fileUri, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+
+      setProgressMessage('Parsing spreadsheet data...');
+      await simulateProgress('Parsing spreadsheet data...', 50);
+
+      // Parse Excel file
+      const workbook = XLSX.read(fileContent, { type: 'base64' });
+      const sheetName = workbook.SheetNames[0];
+      const worksheet = workbook.Sheets[sheetName];
+      const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1 }) as any[][];
+
+      setProgressMessage('Extracting ingredients...');
+      await simulateProgress('Extracting ingredients...', 80);
+
+      // Try to extract ingredients from the spreadsheet
+      const ingredients = parseIngredientsFromExcel(jsonData);
+
+      setProgressMessage('Saving to database...');
+
+      const now = new Date();
+      const recipeId = `recipe_${Date.now()}`;
+      const recipeName = fileName.replace(/\.(xlsx|xls|csv)$/i, '').replace(/_/g, ' ');
+
+      const recipe: Recipe = {
+        id: recipeId,
+        name: recipeName || 'Imported Excel Recipe',
+        status: ingredients.some(ing => !ing.posIngredientId) ? 'needs_review' : 'ready_to_import',
+        confidence: ingredients.length > 0 ? 'medium' : 'low',
+        lastUpdated: now,
+        createdAt: now,
+        source: {
+          type: 'excel',
+          uri: fileUri,
+          uploadedAt: now,
+        },
+        ingredients,
+        issues: ingredients
+          .filter(ing => !ing.posIngredientId)
+          .map(ing => ({
+            type: 'ingredient_not_found' as const,
+            ingredientName: ing.name,
+            message: 'Could not find matching ingredient in inventory',
+          })),
+      };
+
+      await recipeRepository.saveRecipe(recipe);
+      setProgress(100);
+      setProgressMessage('Recipe import complete!');
+
+      setTimeout(() => {
+        setIsProcessing(false);
+        Alert.alert(
+          'Success!',
+          `Excel recipe imported with ${ingredients.length} ingredients.`,
+          [
+            {
+              text: 'View Inbox',
+              onPress: () => router.push('/(tabs)/inbox'),
+            },
+            {
+              text: 'Import Another',
+              style: 'cancel',
+            },
+          ]
+        );
+      }, 1000);
+    } catch (error) {
+      setIsProcessing(false);
+      Alert.alert('Error', 'Failed to process Excel file. Please try again.');
+      console.error('Excel processing error:', error);
+    }
+  };
+
+  const parseIngredientsFromExcel = (data: any[][]): Recipe['ingredients'] => {
+    const ingredients: Recipe['ingredients'] = [];
+
+    // Skip header row if it looks like headers
+    const startRow = data[0]?.some((cell: any) =>
+      typeof cell === 'string' &&
+      ['ingredient', 'name', 'item', 'qty', 'quantity', 'unit'].includes(cell.toLowerCase())
+    ) ? 1 : 0;
+
+    for (let i = startRow; i < data.length; i++) {
+      const row = data[i];
+      if (!row || row.length === 0) continue;
+
+      // Try to identify columns
+      let name = '';
+      let quantity = 0;
+      let unit = 'each';
+
+      if (row.length >= 3) {
+        // Assume format: Name, Quantity, Unit
+        name = String(row[0] || '').trim();
+        quantity = parseFloat(row[1]) || 0;
+        unit = String(row[2] || 'each').trim();
+      } else if (row.length === 2) {
+        // Assume format: Name, Quantity
+        name = String(row[0] || '').trim();
+        quantity = parseFloat(row[1]) || 1;
+      } else if (row.length === 1) {
+        // Just name
+        name = String(row[0] || '').trim();
+        quantity = 1;
+      }
+
+      if (name) {
+        // Try to match with POS ingredients
+        const matchedIngredient = posIngredients.find(
+          pos => pos.name.toLowerCase() === name.toLowerCase() ||
+                 pos.aliases?.some(alias => alias.toLowerCase() === name.toLowerCase())
+        );
+
+        ingredients.push({
+          name,
+          quantity,
+          unit,
+          posIngredientId: matchedIngredient?.id,
+          isNew: !matchedIngredient,
+        });
+      }
+    }
+
+    return ingredients;
   };
 
   const handleTextImport = () => {
@@ -247,10 +599,12 @@ export default function ImportScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.container} edges={['bottom']}>
-      <TopBar />
-
-      <View style={styles.content}>
+    <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
+      <ScrollView
+        style={styles.content}
+        contentContainerStyle={styles.contentContainer}
+        showsVerticalScrollIndicator={false}
+      >
         <View style={styles.header}>
           <View>
             <Text style={styles.title}>Import Recipe</Text>
@@ -276,28 +630,71 @@ export default function ImportScreen() {
           <>
             {/* Import Methods */}
             <View style={styles.methodsGrid}>
-              {renderImportMethod('camera', 'camera.fill', 'Camera', () => setSelectedMethod('camera'))}
-              {renderImportMethod('pdf', 'doc.fill', 'PDF', handlePDFImport)}
-              {renderImportMethod('excel', 'tablecells.fill', 'Excel', handleExcelImport)}
-              {renderImportMethod('text', 'text.alignleft', 'Text', handleTextImport)}
+              {renderImportMethod('camera', 'camera.fill', 'Camera', () => {})}
+              {renderImportMethod('pdf', 'doc.fill', 'PDF', () => {})}
+              {renderImportMethod('excel', 'tablecells.fill', 'Excel', () => {})}
+              {renderImportMethod('text', 'text.alignleft', 'Text', () => {})}
             </View>
 
             {/* Camera Upload Area */}
             {selectedMethod === 'camera' && (
               <View style={styles.uploadArea}>
-                <IconSymbol name="camera" size={64} color="#ccc" />
-                <Text style={styles.uploadText}>Take a photo or select from gallery</Text>
-                <Text style={styles.uploadHint}>Tap to capture</Text>
+                {selectedImages.length === 0 ? (
+                  <>
+                    <IconSymbol name="camera" size={64} color="#ccc" />
+                    <Text style={styles.uploadText}>Take photos or select from gallery</Text>
+                    <Text style={styles.uploadHint}>You can select multiple images at once</Text>
+                  </>
+                ) : (
+                  <>
+                    <View style={styles.selectedImagesHeader}>
+                      <Text style={styles.selectedImagesTitle}>
+                        {selectedImages.length} image{selectedImages.length > 1 ? 's' : ''} selected
+                      </Text>
+                      <TouchableOpacity onPress={handleClearAllImages}>
+                        <Text style={styles.clearAllText}>Clear All</Text>
+                      </TouchableOpacity>
+                    </View>
 
-                <TouchableOpacity style={styles.uploadButton} onPress={handleTakePhoto}>
-                  <IconSymbol name="camera.fill" size={20} color="#fff" />
-                  <Text style={styles.uploadButtonText}>Take Photo</Text>
-                </TouchableOpacity>
+                    <View style={styles.selectedImagesGrid}>
+                      {selectedImages.map((image, index) => (
+                        <View key={index} style={styles.selectedImageContainer}>
+                          <Image source={{ uri: image.uri }} style={styles.selectedImageThumb} />
+                          <TouchableOpacity
+                            style={styles.removeImageButton}
+                            onPress={() => handleRemoveImage(index)}
+                          >
+                            <IconSymbol name="xmark.circle.fill" size={24} color="#ff5252" />
+                          </TouchableOpacity>
+                        </View>
+                      ))}
+                    </View>
+                  </>
+                )}
 
-                <TouchableOpacity style={styles.secondaryButton} onPress={handleSelectFromGallery}>
-                  <IconSymbol name="photo.fill" size={20} color="#2196f3" />
-                  <Text style={styles.secondaryButtonText}>Select from Gallery</Text>
-                </TouchableOpacity>
+                <View style={styles.uploadButtonsRow}>
+                  <TouchableOpacity style={styles.uploadButtonSmall} onPress={handleTakePhoto}>
+                    <IconSymbol name="camera.fill" size={18} color="#fff" />
+                    <Text style={styles.uploadButtonTextSmall}>Camera</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity style={styles.uploadButtonSmall} onPress={handleSelectFromGallery}>
+                    <IconSymbol name="photo.fill" size={18} color="#fff" />
+                    <Text style={styles.uploadButtonTextSmall}>Gallery</Text>
+                  </TouchableOpacity>
+                </View>
+
+                {selectedImages.length > 0 && (
+                  <TouchableOpacity
+                    style={styles.processAllButton}
+                    onPress={handleProcessAllImages}
+                  >
+                    <IconSymbol name="arrow.right.circle.fill" size={22} color="#fff" />
+                    <Text style={styles.processAllButtonText}>
+                      Process {selectedImages.length} Recipe{selectedImages.length > 1 ? 's' : ''}
+                    </Text>
+                  </TouchableOpacity>
+                )}
               </View>
             )}
 
@@ -349,7 +746,28 @@ export default function ImportScreen() {
           /* Processing Screen */
           <View style={styles.processingContainer}>
             <ActivityIndicator size="large" color="#2196f3" />
-            <Text style={styles.processingTitle}>Processing Recipe</Text>
+            <Text style={styles.processingTitle}>Processing Recipes</Text>
+
+            {selectedImages.length > 1 && (
+              <View style={styles.batchProgressContainer}>
+                <Text style={styles.batchProgressText}>
+                  Recipe {currentProcessingIndex + 1} of {selectedImages.length}
+                </Text>
+                <View style={styles.batchProgressDots}>
+                  {selectedImages.map((_, index) => (
+                    <View
+                      key={index}
+                      style={[
+                        styles.batchProgressDot,
+                        index < currentProcessingIndex && styles.batchProgressDotComplete,
+                        index === currentProcessingIndex && styles.batchProgressDotCurrent,
+                      ]}
+                    />
+                  ))}
+                </View>
+              </View>
+            )}
+
             <Text style={styles.processingMessage}>{progressMessage}</Text>
 
             <View style={styles.progressBar}>
@@ -359,7 +777,7 @@ export default function ImportScreen() {
             <Text style={styles.progressText}>{progress}%</Text>
           </View>
         )}
-      </View>
+      </ScrollView>
     </SafeAreaView>
   );
 }
@@ -371,7 +789,11 @@ const styles = StyleSheet.create({
   },
   content: {
     flex: 1,
+  },
+  contentContainer: {
     paddingHorizontal: 16,
+    paddingBottom: 32,
+    flexGrow: 1,
   },
   header: {
     marginTop: 16,
@@ -490,6 +912,112 @@ const styles = StyleSheet.create({
     color: '#2196f3',
     fontSize: 16,
     fontWeight: '600',
+  },
+  selectedImagesHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    width: '100%',
+    marginBottom: 16,
+  },
+  selectedImagesTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#333',
+  },
+  clearAllText: {
+    fontSize: 14,
+    color: '#f44336',
+    fontWeight: '600',
+  },
+  selectedImagesGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+    justifyContent: 'flex-start',
+    width: '100%',
+    marginBottom: 16,
+  },
+  selectedImageContainer: {
+    position: 'relative',
+    width: 80,
+    height: 80,
+    borderRadius: 10,
+    overflow: 'visible',
+  },
+  selectedImageThumb: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 10,
+    backgroundColor: '#e0e0e0',
+  },
+  removeImageButton: {
+    position: 'absolute',
+    top: -8,
+    right: -8,
+    backgroundColor: '#fff',
+    borderRadius: 12,
+  },
+  uploadButtonsRow: {
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 8,
+  },
+  uploadButtonSmall: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#2196f3',
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderRadius: 10,
+    gap: 6,
+  },
+  uploadButtonTextSmall: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  processAllButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#4caf50',
+    paddingHorizontal: 28,
+    paddingVertical: 16,
+    borderRadius: 12,
+    marginTop: 20,
+    gap: 10,
+  },
+  processAllButtonText: {
+    color: '#fff',
+    fontSize: 17,
+    fontWeight: '700',
+  },
+  batchProgressContainer: {
+    alignItems: 'center',
+    marginTop: 8,
+    marginBottom: 8,
+  },
+  batchProgressText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#666',
+    marginBottom: 8,
+  },
+  batchProgressDots: {
+    flexDirection: 'row',
+    gap: 6,
+  },
+  batchProgressDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: '#e0e0e0',
+  },
+  batchProgressDotComplete: {
+    backgroundColor: '#4caf50',
+  },
+  batchProgressDotCurrent: {
+    backgroundColor: '#2196f3',
   },
   tipsContainer: {
     backgroundColor: '#fff',

@@ -16,10 +16,18 @@ export type Unit =
   | 'quart'
   | 'pint';
 
+export interface UnitConversion {
+  unit: Unit | string;
+  conversionFactor: number; // Relative to base unit
+}
+
 export interface Ingredient {
   name: string;
   quantity: number;
   unit: Unit | string;
+  originalUnit?: string; // The unit as it appeared in the source (before normalization)
+  unitUnclear?: boolean; // True if the unit couldn't be determined confidently
+  supportedUnits?: UnitConversion[]; // Multiple units this ingredient can use
   posIngredientId?: string; // Links to POS master-list ingredient
   isNew?: boolean; // True if ingredient doesn't exist in POS
   aliases?: string[]; // Alternative names for this ingredient
@@ -56,10 +64,11 @@ export interface RecipeSource {
 }
 
 export interface RecipeIssue {
-  type: 'unit_unclear' | 'ingredient_not_found' | 'similar_ingredient' | 'missing_data' | 'import_failed';
+  type: 'unit_unclear' | 'ingredient_not_found' | 'similar_ingredient' | 'missing_data' | 'import_failed' | 'duplicate_ingredient';
   message: string;
   ingredientName?: string;
   suggestedFix?: string;
+  duplicateIndices?: number[]; // For duplicate_ingredient: indices of duplicate ingredients
 }
 
 export interface ParsedRecipeResponse {

@@ -1,4 +1,3 @@
-import { TopBar } from '@/components/TopBar';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { usePOSMenuItems } from '@/hooks/database/usePOSMenuItems';
 import type { POSMenuItem } from '@/types/pos';
@@ -67,9 +66,8 @@ export default function MenuScreen() {
 
   if (loading) {
     return (
-      <SafeAreaView style={styles.container} edges={['bottom']}>
-        <TopBar />
-        <View style={[styles.content, styles.centerContent]}>
+      <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
+                <View style={[styles.content, styles.centerContent]}>
           <ActivityIndicator size="large" color="#2196f3" />
           <Text style={styles.loadingText}>Loading menu items...</Text>
         </View>
@@ -79,9 +77,8 @@ export default function MenuScreen() {
 
   if (error) {
     return (
-      <SafeAreaView style={styles.container} edges={['bottom']}>
-        <TopBar />
-        <View style={[styles.content, styles.centerContent]}>
+      <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
+                <View style={[styles.content, styles.centerContent]}>
           <Text style={styles.errorText}>Error: {error.message}</Text>
         </View>
       </SafeAreaView>
@@ -89,9 +86,8 @@ export default function MenuScreen() {
   }
 
   return (
-    <SafeAreaView style={styles.container} edges={['bottom']}>
-      <TopBar />
-
+    <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
+      
       <View style={styles.content}>
         <View style={styles.header}>
           <View>

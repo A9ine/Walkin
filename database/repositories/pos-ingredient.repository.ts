@@ -94,6 +94,17 @@ export class POSIngredientRepository {
         }
       }
 
+      // Insert supported units if any
+      if (ingredient.supportedUnits && ingredient.supportedUnits.length > 0) {
+        for (let i = 0; i < ingredient.supportedUnits.length; i++) {
+          const u = ingredient.supportedUnits[i];
+          await database.runAsync(
+            'INSERT INTO pos_ingredient_units (id, pos_ingredient_id, unit, conversion_factor, is_base_unit) VALUES (?, ?, ?, ?, ?)',
+            [`${ingredient.id}_unit_${i}`, ingredient.id, u.unit, u.conversionFactor || 1, u.isBaseUnit ? 1 : 0]
+          );
+        }
+      }
+
       await database.runAsync('COMMIT');
     } catch (error) {
       await database.runAsync('ROLLBACK');
@@ -163,6 +174,25 @@ export class POSIngredientRepository {
         }
       }
 
+      // Update supported units if provided
+      if (updates.supportedUnits !== undefined) {
+        // Delete old units
+        await database.runAsync('DELETE FROM pos_ingredient_units WHERE pos_ingredient_id = ?', [
+          id,
+        ]);
+
+        // Insert new units
+        if (updates.supportedUnits.length > 0) {
+          for (let i = 0; i < updates.supportedUnits.length; i++) {
+            const u = updates.supportedUnits[i];
+            await database.runAsync(
+              'INSERT INTO pos_ingredient_units (id, pos_ingredient_id, unit, conversion_factor, is_base_unit) VALUES (?, ?, ?, ?, ?)',
+              [`${id}_unit_${i}_${now}`, id, u.unit, u.conversionFactor || 1, u.isBaseUnit ? 1 : 0]
+            );
+          }
+        }
+      }
+
       await database.runAsync('COMMIT');
     } catch (error) {
       await database.runAsync('ROLLBACK');
@@ -207,6 +237,24 @@ export class POSIngredientRepository {
 
     const aliases = aliasRows.map((a) => a.alias);
 
+    // Get supported units
+    const unitRows = await database.getAllAsync<{
+      unit: string;
+      conversion_factor: number;
+      is_base_unit: number;
+    }>(
+      'SELECT unit, conversion_factor, is_base_unit FROM pos_ingredient_units WHERE pos_ingredient_id = ?',
+      [row.id]
+    );
+
+    const supportedUnits = unitRows.length > 0
+      ? unitRows.map((u) => ({
+          unit: u.unit,
+          conversionFactor: u.conversion_factor,
+          isBaseUnit: u.is_base_unit === 1,
+        }))
+      : undefined;
+
     // Get recipes using this ingredient
     const usedInRecipes = await this.getRecipesUsingIngredient(row.id);
 
@@ -214,6 +262,7 @@ export class POSIngredientRepository {
       id: row.id,
       name: row.name,
       unit: row.unit,
+      supportedUnits,
       packSize: row.pack_size,
       posId: row.pos_id,
       isActive: row.is_active === 1,
