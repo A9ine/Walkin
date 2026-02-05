@@ -31,10 +31,35 @@ yarn-error.*
 *.pem
 
 # local env files
-.env*.local
+.env
+.env.*
+!.env.example
 
 # API keys and config
 config/env.ts
+
+# Firebase
+.firebase/
+.firebaserc
+firebase-debug.log
+firestore-debug.log
+ui-debug.log
+database-debug.log
+
+# Google Services (Firebase config files with API keys)
+GoogleService-Info.plist
+google-services.json
+
+# Functions build output
+functions/lib/
+functions/node_modules/
+
+# Secrets and credentials
+*.secret
+*.secrets
+*credentials*.json
+serviceAccount*.json
+*-service-account*.json
 
 # typescript
 *.tsbuildinfo

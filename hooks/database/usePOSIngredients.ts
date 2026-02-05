@@ -1,16 +1,23 @@
 import { useState, useEffect, useCallback } from 'react';
 import type { POSIngredient } from '@/types/pos';
 import { posIngredientRepository } from '@/database/repositories/pos-ingredient.repository';
+import { useAuth } from '@/contexts/AuthContext';
 
 export function usePOSIngredients() {
+  const { user } = useAuth();
   const [ingredients, setIngredients] = useState<POSIngredient[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
 
   const loadIngredients = useCallback(async () => {
+    if (!user?.uid) {
+      setIngredients([]);
+      setLoading(false);
+      return;
+    }
     try {
       setLoading(true);
-      const allIngredients = await posIngredientRepository.getAllIngredients();
+      const allIngredients = await posIngredientRepository.getAllIngredients(user.uid);
       setIngredients(allIngredients);
       setError(null);
     } catch (err) {
@@ -19,7 +26,7 @@ export function usePOSIngredients() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [user?.uid]);
 
   useEffect(() => {
     loadIngredients();
@@ -27,15 +34,16 @@ export function usePOSIngredients() {
 
   const createIngredient = useCallback(
     async (ingredient: Omit<POSIngredient, 'usedInRecipes'>) => {
+      if (!user?.uid) throw new Error('User not authenticated');
       try {
-        await posIngredientRepository.createIngredient(ingredient);
+        await posIngredientRepository.createIngredient(ingredient, user.uid);
         await loadIngredients();
       } catch (err) {
         console.error('Failed to create ingredient:', err);
         throw err;
       }
     },
-    [loadIngredients]
+    [loadIngredients, user?.uid]
   );
 
   const updateIngredient = useCallback(

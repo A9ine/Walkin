@@ -76,6 +76,9 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const signUp = async (email: string, password: string): Promise<void> => {
     setIsGuest(false);
     await createUserWithEmailAndPassword(auth, email, password);
+    // Sign out after registration so user can manually log in
+    await firebaseSignOut(auth);
+    setUser(null);
   };
 
   const signOut = async (): Promise<void> => {
@@ -84,7 +87,14 @@ export function AuthProvider({ children }: AuthProviderProps) {
       setUser(null);
       return;
     }
-    await firebaseSignOut(auth);
+    try {
+      await firebaseSignOut(auth);
+      // Ensure user state is cleared even if onAuthStateChanged is slow
+      setUser(null);
+    } catch (error) {
+      console.error('Sign out error:', error);
+      throw error;
+    }
   };
 
   const resetPassword = async (email: string): Promise<void> => {

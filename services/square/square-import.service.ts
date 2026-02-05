@@ -25,12 +25,23 @@ export interface SquareCatalogObject {
           amount: number;
           currency: string;
         };
+        track_inventory?: boolean;
+        stockable?: boolean;
       };
     }>;
   };
   category_data?: {
     name: string;
   };
+}
+
+export interface SquareInventoryCount {
+  catalog_object_id: string;
+  catalog_object_type: string;
+  state: string;
+  location_id: string;
+  quantity: string;
+  calculated_at: string;
 }
 
 export interface ImportProgress {
@@ -56,7 +67,8 @@ class SquareImportService {
    * Fetch all catalog items from Square
    */
   async fetchCatalog(
-    onProgress?: (progress: ImportProgress) => void
+    onProgress?: (progress: ImportProgress) => void,
+    types: string = 'ITEM,CATEGORY'
   ): Promise<SquareCatalogObject[]> {
     const accessToken = await squareAuthService.getAccessToken();
 
@@ -75,9 +87,7 @@ class SquareImportService {
     let cursor: string | undefined;
 
     do {
-      const params = new URLSearchParams({
-        types: 'ITEM,CATEGORY',
-      });
+      const params = new URLSearchParams({ types });
 
       if (cursor) {
         params.append('cursor', cursor);
@@ -117,14 +127,91 @@ class SquareImportService {
   }
 
   /**
+   * Fetch inventory counts from Square
+   */
+  async fetchInventoryCounts(
+    locationId?: string,
+    onProgress?: (progress: ImportProgress) => void
+  ): Promise<SquareInventoryCount[]> {
+    const accessToken = await squareAuthService.getAccessToken();
+
+    if (!accessToken) {
+      throw new Error('Not authenticated with Square');
+    }
+
+    onProgress?.({
+      stage: 'fetching',
+      message: 'Fetching inventory counts...',
+      current: 0,
+      total: 100,
+    });
+
+    const allCounts: SquareInventoryCount[] = [];
+    let cursor: string | undefined;
+
+    do {
+      const body: any = {
+        states: ['IN_STOCK', 'SOLD', 'RETURNED_BY_CUSTOMER', 'RESERVED_FOR_SALE'],
+      };
+
+      if (locationId) {
+        body.location_ids = [locationId];
+      }
+
+      if (cursor) {
+        body.cursor = cursor;
+      }
+
+      const response = await fetch(`${SQUARE_API_BASE}/inventory/counts/batch-retrieve`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${accessToken}`,
+          'Square-Version': '2024-01-18',
+        },
+        body: JSON.stringify(body),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.errors?.[0]?.detail || 'Failed to fetch inventory');
+      }
+
+      const data = await response.json();
+
+      if (data.counts) {
+        allCounts.push(...data.counts);
+      }
+
+      cursor = data.cursor;
+
+      onProgress?.({
+        stage: 'fetching',
+        message: `Fetched ${allCounts.length} inventory counts...`,
+        current: Math.min(allCounts.length * 2, 50),
+        total: 100,
+      });
+    } while (cursor);
+
+    return allCounts;
+  }
+
+  /**
    * Import catalog data into the local database
    */
   async importCatalog(
-    onProgress?: (progress: ImportProgress) => void
+    onProgress?: (progress: ImportProgress) => void,
+    userId?: string
   ): Promise<ImportResult> {
+    if (!userId) {
+      return {
+        success: false,
+        menuItemsImported: 0,
+        ingredientsImported: 0,
+        error: 'User not authenticated',
+      };
+    }
     try {
-      // For demo purposes, generate mock catalog data
-      // In production, this would call fetchCatalog()
       onProgress?.({
         stage: 'fetching',
         message: 'Connecting to Square...',
@@ -132,19 +219,13 @@ class SquareImportService {
         total: 100,
       });
 
-      await new Promise(resolve => setTimeout(resolve, 500));
-
-      onProgress?.({
-        stage: 'fetching',
-        message: 'Fetching menu items...',
-        current: 25,
-        total: 100,
-      });
-
-      await new Promise(resolve => setTimeout(resolve, 500));
-
-      // Generate mock catalog data
-      const mockCatalog = this.generateMockCatalog();
+      // Fetch real catalog data from Square
+      const catalog = await this.fetchCatalog((progress) => {
+        onProgress?.({
+          ...progress,
+          current: Math.min(progress.current, 40),
+        });
+      }, 'ITEM,CATEGORY');
 
       onProgress?.({
         stage: 'processing',
@@ -152,8 +233,6 @@ class SquareImportService {
         current: 50,
         total: 100,
       });
-
-      await new Promise(resolve => setTimeout(resolve, 500));
 
       // Save to database
       onProgress?.({
@@ -163,7 +242,7 @@ class SquareImportService {
         total: 100,
       });
 
-      const result = await this.saveCatalogToDatabase(mockCatalog);
+      const result = await this.saveCatalogToDatabase(catalog, userId);
 
       onProgress?.({
         stage: 'complete',
@@ -185,80 +264,134 @@ class SquareImportService {
   }
 
   /**
-   * Generate mock catalog data for demo
+   * Import inventory items (stockable items) as POS ingredients
    */
-  private generateMockCatalog(): SquareCatalogObject[] {
-    const categories = [
-      { id: 'cat_desserts', name: 'Desserts' },
-      { id: 'cat_breads', name: 'Breads' },
-      { id: 'cat_pastries', name: 'Pastries' },
-      { id: 'cat_drinks', name: 'Drinks' },
-    ];
+  async importInventory(
+    onProgress?: (progress: ImportProgress) => void,
+    userId?: string
+  ): Promise<ImportResult> {
+    if (!userId) {
+      return {
+        success: false,
+        menuItemsImported: 0,
+        ingredientsImported: 0,
+        error: 'User not authenticated',
+      };
+    }
 
-    const items = [
-      { name: 'Chocolate Chip Cookie', category: 'cat_desserts', price: 350 },
-      { name: 'Classic Brownie', category: 'cat_desserts', price: 400 },
-      { name: 'Vanilla Cupcake', category: 'cat_desserts', price: 450 },
-      { name: 'Banana Bread', category: 'cat_breads', price: 600 },
-      { name: 'Cinnamon Roll', category: 'cat_pastries', price: 500 },
-      { name: 'Blueberry Muffin', category: 'cat_pastries', price: 375 },
-      { name: 'Croissant', category: 'cat_pastries', price: 425 },
-      { name: 'Espresso', category: 'cat_drinks', price: 300 },
-      { name: 'Latte', category: 'cat_drinks', price: 475 },
-      { name: 'Hot Chocolate', category: 'cat_drinks', price: 400 },
-    ];
+    try {
+      onProgress?.({
+        stage: 'fetching',
+        message: 'Connecting to Square...',
+        current: 0,
+        total: 100,
+      });
 
-    const now = new Date().toISOString();
+      // Fetch catalog items that are stockable (inventory items)
+      const catalog = await this.fetchCatalog((progress) => {
+        onProgress?.({
+          ...progress,
+          current: Math.min(progress.current, 40),
+        });
+      }, 'ITEM');
 
-    const catalogObjects: SquareCatalogObject[] = [
-      // Categories
-      ...categories.map(cat => ({
-        type: 'CATEGORY',
-        id: cat.id,
-        updated_at: now,
-        version: 1,
-        is_deleted: false,
-        present_at_all_locations: true,
-        category_data: {
-          name: cat.name,
-        },
-      })),
-      // Items
-      ...items.map((item, index) => ({
-        type: 'ITEM',
-        id: `item_${index + 1}`,
-        updated_at: now,
-        version: 1,
-        is_deleted: false,
-        present_at_all_locations: true,
-        item_data: {
-          name: item.name,
-          category_id: item.category,
-          product_type: 'FOOD',
-          variations: [
-            {
-              id: `var_${index + 1}`,
-              item_variation_data: {
-                name: 'Regular',
-                pricing_type: 'FIXED_PRICING',
-                price_money: {
-                  amount: item.price,
-                  currency: 'USD',
-                },
-              },
-            },
-          ],
-        },
-      })),
-    ];
+      onProgress?.({
+        stage: 'processing',
+        message: 'Processing inventory items...',
+        current: 50,
+        total: 100,
+      });
 
-    return catalogObjects;
+      // Filter for stockable items (inventory items)
+      const inventoryItems = catalog.filter((item) => {
+        if (item.type !== 'ITEM' || !item.item_data?.variations) return false;
+        return item.item_data.variations.some(
+          (v) => v.item_variation_data.track_inventory || v.item_variation_data.stockable
+        );
+      });
+
+      onProgress?.({
+        stage: 'saving',
+        message: 'Saving inventory to local database...',
+        current: 75,
+        total: 100,
+      });
+
+      const result = await this.saveInventoryToDatabase(inventoryItems, userId);
+
+      onProgress?.({
+        stage: 'complete',
+        message: 'Inventory import complete!',
+        current: 100,
+        total: 100,
+      });
+
+      return result;
+    } catch (error) {
+      console.error('Inventory import error:', error);
+      return {
+        success: false,
+        menuItemsImported: 0,
+        ingredientsImported: 0,
+        error: error instanceof Error ? error.message : 'Inventory import failed',
+      };
+    }
+  }
+
+  /**
+   * Save inventory items as POS ingredients to the database
+   */
+  private async saveInventoryToDatabase(
+    inventoryItems: SquareCatalogObject[],
+    userId: string
+  ): Promise<ImportResult> {
+    const db = DatabaseService.getInstance().getDB();
+    const now = Date.now();
+
+    let ingredientsImported = 0;
+
+    for (const item of inventoryItems) {
+      if (!item.item_data) continue;
+
+      try {
+        // Check if ingredient already exists for this user
+        const existing = await db.getFirstAsync<{ id: string }>(
+          'SELECT id FROM pos_ingredients WHERE user_id = ? AND pos_id = ?',
+          [userId, item.id]
+        );
+
+        if (existing) {
+          // Update existing ingredient
+          await db.runAsync(
+            `UPDATE pos_ingredients SET name = ?, updated_at = ? WHERE user_id = ? AND pos_id = ?`,
+            [item.item_data.name, now, userId, item.id]
+          );
+        } else {
+          // Insert new ingredient
+          const localId = `ing_${Date.now()}_${ingredientsImported}`;
+          await db.runAsync(
+            `INSERT INTO pos_ingredients (id, user_id, name, unit, pos_id, is_active, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, 1, ?, ?)`,
+            [localId, userId, item.item_data.name, 'each', item.id, now, now]
+          );
+        }
+        ingredientsImported++;
+      } catch (error) {
+        console.error('Error saving inventory item:', error);
+      }
+    }
+
+    return {
+      success: true,
+      menuItemsImported: 0,
+      ingredientsImported,
+    };
   }
 
   /**
    * Save catalog data to the local database
    */
-  private async saveCatalogToDatabase(catalog: SquareCatalogObject[]): Promise<ImportResult> {
+  private async saveCatalogToDatabase(catalog: SquareCatalogObject[], userId: string): Promise<ImportResult> {
     const db = DatabaseService.getInstance().getDB();
     const now = Date.now();
 
@@ -282,10 +415,10 @@ class SquareImportService {
         : 'Uncategorized';
 
       try {
-        // Check if item already exists
+        // Check if item already exists for this user
         const existing = await db.getFirstAsync<{ id: string }>(
-          'SELECT id FROM pos_menu_items WHERE pos_id = ?',
-          [item.id]
+          'SELECT id FROM pos_menu_items WHERE user_id = ? AND pos_id = ?',
+          [userId, item.id]
         );
 
         if (existing) {
@@ -293,16 +426,16 @@ class SquareImportService {
           await db.runAsync(
             `UPDATE pos_menu_items SET
               name = ?, category = ?, updated_at = ?
-            WHERE pos_id = ?`,
-            [item.item_data.name, categoryName, now, item.id]
+            WHERE user_id = ? AND pos_id = ?`,
+            [item.item_data.name, categoryName, now, userId, item.id]
           );
         } else {
           // Insert new item
           const localId = `menu_${Date.now()}_${menuItemsImported}`;
           await db.runAsync(
-            `INSERT INTO pos_menu_items (id, name, category, pos_id, has_recipe, recipe_status, created_at, updated_at)
-            VALUES (?, ?, ?, ?, 0, 'missing', ?, ?)`,
-            [localId, item.item_data.name, categoryName, item.id, now, now]
+            `INSERT INTO pos_menu_items (id, user_id, name, category, pos_id, has_recipe, recipe_status, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, 0, 'missing', ?, ?)`,
+            [localId, userId, item.item_data.name, categoryName, item.id, now, now]
           );
         }
         menuItemsImported++;

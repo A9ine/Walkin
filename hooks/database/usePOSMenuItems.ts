@@ -1,13 +1,20 @@
 import { useState, useEffect, useCallback } from 'react';
 import type { POSMenuItem } from '@/types/pos';
 import { DatabaseService } from '@/database/db.service';
+import { useAuth } from '@/contexts/AuthContext';
 
 export function usePOSMenuItems() {
+  const { user } = useAuth();
   const [menuItems, setMenuItems] = useState<POSMenuItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
 
   const loadMenuItems = useCallback(async () => {
+    if (!user?.uid) {
+      setMenuItems([]);
+      setLoading(false);
+      return;
+    }
     try {
       setLoading(true);
       const db = DatabaseService.getInstance().getDB();
@@ -19,9 +26,10 @@ export function usePOSMenuItems() {
         pos_id: string;
         recipe_id: string | null;
         recipe_status: 'mapped' | 'needs_review' | 'missing';
-      }>(`
-        SELECT * FROM pos_menu_items ORDER BY name ASC
-      `);
+      }>(
+        'SELECT * FROM pos_menu_items WHERE user_id = ? ORDER BY name ASC',
+        [user.uid]
+      );
 
       console.log(`📋 Loaded ${rows.length} menu items from database`);
       rows.forEach((row) => {
@@ -46,7 +54,7 @@ export function usePOSMenuItems() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [user?.uid]);
 
   useEffect(() => {
     loadMenuItems();

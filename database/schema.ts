@@ -37,6 +37,7 @@ export const SCHEMA = {
   RECIPES: `
     CREATE TABLE IF NOT EXISTS recipes (
       id TEXT PRIMARY KEY NOT NULL,
+      user_id TEXT NOT NULL,
       name TEXT NOT NULL,
       status TEXT NOT NULL CHECK(status IN ('ready_to_import', 'needs_review', 'import_failed', 'draft')),
       confidence TEXT NOT NULL CHECK(confidence IN ('high', 'medium', 'low')),
@@ -45,7 +46,8 @@ export const SCHEMA = {
       source_content TEXT,
       pos_menu_item_id TEXT,
       created_at INTEGER NOT NULL,
-      last_updated INTEGER NOT NULL
+      last_updated INTEGER NOT NULL,
+      FOREIGN KEY (user_id) REFERENCES user_profiles(firebase_uid)
     );
   `,
 
@@ -83,13 +85,16 @@ export const SCHEMA = {
   POS_INGREDIENTS: `
     CREATE TABLE IF NOT EXISTS pos_ingredients (
       id TEXT PRIMARY KEY NOT NULL,
+      user_id TEXT NOT NULL,
       name TEXT NOT NULL,
       unit TEXT NOT NULL,
       pack_size TEXT,
-      pos_id TEXT NOT NULL UNIQUE,
+      pos_id TEXT NOT NULL,
       is_active INTEGER NOT NULL DEFAULT 1,
       created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL
+      updated_at INTEGER NOT NULL,
+      UNIQUE(user_id, pos_id),
+      FOREIGN KEY (user_id) REFERENCES user_profiles(firebase_uid)
     );
   `,
 
@@ -119,14 +124,17 @@ export const SCHEMA = {
   POS_MENU_ITEMS: `
     CREATE TABLE IF NOT EXISTS pos_menu_items (
       id TEXT PRIMARY KEY NOT NULL,
+      user_id TEXT NOT NULL,
       name TEXT NOT NULL,
       category TEXT,
-      pos_id TEXT NOT NULL UNIQUE,
+      pos_id TEXT NOT NULL,
       has_recipe INTEGER NOT NULL DEFAULT 0,
       recipe_id TEXT,
       recipe_status TEXT CHECK(recipe_status IN ('mapped', 'needs_review', 'missing')),
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL,
+      UNIQUE(user_id, pos_id),
+      FOREIGN KEY (user_id) REFERENCES user_profiles(firebase_uid),
       FOREIGN KEY (recipe_id) REFERENCES recipes(id) ON DELETE SET NULL
     );
   `,
@@ -135,12 +143,14 @@ export const SCHEMA = {
   SYNC_LOGS: `
     CREATE TABLE IF NOT EXISTS sync_logs (
       id TEXT PRIMARY KEY NOT NULL,
+      user_id TEXT NOT NULL,
       timestamp INTEGER NOT NULL,
       type TEXT NOT NULL CHECK(type IN ('menu_sync', 'ingredient_sync', 'recipe_import')),
       status TEXT NOT NULL CHECK(status IN ('success', 'failed', 'partial')),
       items_processed INTEGER NOT NULL,
       details TEXT,
-      error_message TEXT
+      error_message TEXT,
+      FOREIGN KEY (user_id) REFERENCES user_profiles(firebase_uid)
     );
   `,
 
@@ -148,11 +158,15 @@ export const SCHEMA = {
   INDEXES: [
     'CREATE INDEX IF NOT EXISTS idx_user_profiles_firebase_uid ON user_profiles(firebase_uid);',
     'CREATE INDEX IF NOT EXISTS idx_user_pos_connections_user_id ON user_pos_connections(user_id);',
+    'CREATE INDEX IF NOT EXISTS idx_recipes_user_id ON recipes(user_id);',
     'CREATE INDEX IF NOT EXISTS idx_recipes_status ON recipes(status);',
     'CREATE INDEX IF NOT EXISTS idx_recipes_confidence ON recipes(confidence);',
     'CREATE INDEX IF NOT EXISTS idx_ingredients_recipe_id ON ingredients(recipe_id);',
     'CREATE INDEX IF NOT EXISTS idx_recipe_issues_recipe_id ON recipe_issues(recipe_id);',
+    'CREATE INDEX IF NOT EXISTS idx_pos_ingredients_user_id ON pos_ingredients(user_id);',
     'CREATE INDEX IF NOT EXISTS idx_pos_ingredients_active ON pos_ingredients(is_active);',
+    'CREATE INDEX IF NOT EXISTS idx_pos_menu_items_user_id ON pos_menu_items(user_id);',
     'CREATE INDEX IF NOT EXISTS idx_pos_menu_items_recipe_status ON pos_menu_items(recipe_status);',
+    'CREATE INDEX IF NOT EXISTS idx_sync_logs_user_id ON sync_logs(user_id);',
   ],
 };

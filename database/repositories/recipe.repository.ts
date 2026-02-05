@@ -6,7 +6,7 @@ export class RecipeRepository {
   /**
    * Save a new recipe to database
    */
-  async saveRecipe(recipe: Recipe): Promise<void> {
+  async saveRecipe(recipe: Recipe, userId: string): Promise<void> {
     const database = db.getDB();
 
     try {
@@ -14,10 +14,11 @@ export class RecipeRepository {
 
       // Insert recipe
       await database.runAsync(
-        `INSERT INTO recipes (id, name, status, confidence, source_type, source_uri, source_content, pos_menu_item_id, created_at, last_updated)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO recipes (id, user_id, name, status, confidence, source_type, source_uri, source_content, pos_menu_item_id, created_at, last_updated)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           recipe.id,
+          userId,
           recipe.name,
           recipe.status,
           recipe.confidence,
@@ -86,13 +87,14 @@ export class RecipeRepository {
   }
 
   /**
-   * Get all recipes
+   * Get all recipes for a user
    */
-  async getAllRecipes(): Promise<Recipe[]> {
+  async getAllRecipes(userId: string): Promise<Recipe[]> {
     const database = db.getDB();
 
     const recipeRows = await database.getAllAsync<any>(
-      'SELECT * FROM recipes ORDER BY last_updated DESC'
+      'SELECT * FROM recipes WHERE user_id = ? ORDER BY last_updated DESC',
+      [userId]
     );
 
     const recipes: Recipe[] = [];
@@ -106,14 +108,14 @@ export class RecipeRepository {
   }
 
   /**
-   * Get recipes by status
+   * Get recipes by status for a user
    */
-  async getRecipesByStatus(status: Recipe['status']): Promise<Recipe[]> {
+  async getRecipesByStatus(userId: string, status: Recipe['status']): Promise<Recipe[]> {
     const database = db.getDB();
 
     const recipeRows = await database.getAllAsync<any>(
-      'SELECT * FROM recipes WHERE status = ? ORDER BY last_updated DESC',
-      [status]
+      'SELECT * FROM recipes WHERE user_id = ? AND status = ? ORDER BY last_updated DESC',
+      [userId, status]
     );
 
     const recipes: Recipe[] = [];

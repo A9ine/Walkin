@@ -1,8 +1,11 @@
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { useAuth } from '@/contexts/AuthContext';
-import { squareAuthService } from '@/services/square/square-auth.service';
+import { useSquareAuth } from '@/contexts/SquareAuthContext';
 import { squareImportService, type ImportProgress } from '@/services/square/square-import.service';
-import React, { useState, useEffect } from 'react';
+import { squareExportService } from '@/services/square/square-export.service';
+import { usePOSIngredients } from '@/hooks/database/usePOSIngredients';
+import { useRecipes } from '@/hooks/database/useRecipes';
+import React, { useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -14,89 +17,24 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { router } from 'expo-router';
 
-interface POSConnectionState {
-  isConnected: boolean;
-  provider: string;
-  merchantId?: string;
-  lastSyncedAt?: Date;
-}
+type SyncType = 'import_menu' | 'import_inventory' | 'export_recipes' | 'export_inventory';
 
 export default function SettingsScreen() {
-  const { user, signOut, isGuest } = useAuth();
+  const { user, signOut } = useAuth();
+  const { isSquareConnected, merchantId, disconnectSquare, isLoading: squareLoading } = useSquareAuth();
+  const { ingredients, loadIngredients } = usePOSIngredients();
+  const { recipes } = useRecipes();
 
-  const [posConnection, setPosConnection] = useState<POSConnectionState>({
-    isConnected: false,
-    provider: 'square',
-  });
-  const [isLoading, setIsLoading] = useState(true);
+  const [lastSyncedAt, setLastSyncedAt] = useState<Date | null>(new Date());
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncProgress, setSyncProgress] = useState<ImportProgress | null>(null);
   const [showSyncModal, setShowSyncModal] = useState(false);
-
-  // Check Square connection status on mount
-  useEffect(() => {
-    checkSquareConnection();
-  }, []);
-
-  const checkSquareConnection = async () => {
-    try {
-      const isAuthenticated = await squareAuthService.isAuthenticated();
-      const tokens = await squareAuthService.getStoredTokens();
-
-      setPosConnection({
-        isConnected: isAuthenticated,
-        provider: 'square',
-        merchantId: tokens?.merchantId,
-        lastSyncedAt: isAuthenticated ? new Date() : undefined,
-      });
-    } catch (error) {
-      console.error('Error checking Square connection:', error);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const handleConnectSquare = async () => {
-    setIsLoading(true);
-
-    try {
-      const result = await squareAuthService.authorize();
-
-      if (result.success) {
-        setPosConnection({
-          isConnected: true,
-          provider: 'square',
-          merchantId: result.merchantId,
-          lastSyncedAt: new Date(),
-        });
-
-        // Show sync modal after successful connection
-        Alert.alert(
-          'Connected to Square!',
-          'Would you like to sync your menu items now?',
-          [
-            { text: 'Later', style: 'cancel' },
-            { text: 'Sync Now', onPress: handleSyncNow },
-          ]
-        );
-      } else {
-        Alert.alert('Connection Failed', result.error || 'Failed to connect to Square');
-      }
-    } catch (error) {
-      Alert.alert('Error', 'Failed to connect to Square. Please try again.');
-    } finally {
-      setIsLoading(false);
-    }
-  };
+  const [syncType, setSyncType] = useState<SyncType>('import_menu');
 
   const handleSyncNow = async () => {
-    if (!posConnection.isConnected) {
-      // If not connected, start the auth flow first
-      handleConnectSquare();
-      return;
-    }
-
+    setSyncType('import_menu');
     setShowSyncModal(true);
     setIsSyncing(true);
     setSyncProgress(null);
@@ -104,14 +42,10 @@ export default function SettingsScreen() {
     try {
       const result = await squareImportService.importCatalog((progress) => {
         setSyncProgress(progress);
-      });
+      }, user?.uid);
 
       if (result.success) {
-        setPosConnection(prev => ({
-          ...prev,
-          lastSyncedAt: new Date(),
-        }));
-
+        setLastSyncedAt(new Date());
         Alert.alert(
           'Sync Complete!',
           `Imported ${result.menuItemsImported} menu items from Square.`,
@@ -129,21 +63,177 @@ export default function SettingsScreen() {
     }
   };
 
+  const handleImportInventory = async () => {
+    setSyncType('import_inventory');
+    setShowSyncModal(true);
+    setIsSyncing(true);
+    setSyncProgress(null);
+
+    try {
+      const result = await squareImportService.importInventory((progress) => {
+        setSyncProgress(progress);
+      }, user?.uid);
+
+      if (result.success) {
+        await loadIngredients();
+        Alert.alert(
+          'Import Complete!',
+          `Imported ${result.ingredientsImported} inventory items from Square.`,
+          [{ text: 'OK', onPress: () => setShowSyncModal(false) }]
+        );
+      } else {
+        Alert.alert('Import Failed', result.error || 'Failed to import inventory');
+        setShowSyncModal(false);
+      }
+    } catch (error) {
+      Alert.alert('Error', 'Failed to import inventory. Please try again.');
+      setShowSyncModal(false);
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  const handleExportRecipes = async () => {
+    if (recipes.length === 0) {
+      Alert.alert('No Recipes', 'You don\'t have any recipes to export.');
+      return;
+    }
+
+    const readyRecipes = recipes.filter(r => r.status === 'ready_to_import');
+    if (readyRecipes.length === 0) {
+      Alert.alert(
+        'No Ready Recipes',
+        'No recipes are ready for export. Please ensure all ingredients are matched first.'
+      );
+      return;
+    }
+
+    Alert.alert(
+      'Export Recipes',
+      `Export ${readyRecipes.length} recipe(s) to Square as menu items?`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Export',
+          onPress: async () => {
+            setSyncType('export_recipes');
+            setShowSyncModal(true);
+            setIsSyncing(true);
+            setSyncProgress(null);
+
+            try {
+              const result = await squareExportService.exportRecipes(
+                readyRecipes,
+                (current, total, name) => {
+                  setSyncProgress({
+                    stage: 'processing',
+                    message: `Exporting ${name}...`,
+                    current,
+                    total,
+                  });
+                }
+              );
+
+              if (result.success) {
+                Alert.alert(
+                  'Export Complete!',
+                  `Exported ${result.syncedCount} recipe(s) to Square.`,
+                  [{ text: 'OK', onPress: () => setShowSyncModal(false) }]
+                );
+              } else {
+                const errorMsg = result.errors.length > 0
+                  ? `Exported ${result.syncedCount}. Errors:\n${result.errors.slice(0, 3).join('\n')}`
+                  : 'Export failed';
+                Alert.alert('Export Issues', errorMsg);
+                setShowSyncModal(false);
+              }
+            } catch (error) {
+              Alert.alert('Error', 'Failed to export recipes. Please try again.');
+              setShowSyncModal(false);
+            } finally {
+              setIsSyncing(false);
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  const handleExportInventory = async () => {
+    if (ingredients.length === 0) {
+      Alert.alert('No Inventory', 'You don\'t have any inventory items to export.');
+      return;
+    }
+
+    Alert.alert(
+      'Export Inventory',
+      `Export ${ingredients.length} inventory item(s) to Square?`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Export',
+          onPress: async () => {
+            setSyncType('export_inventory');
+            setShowSyncModal(true);
+            setIsSyncing(true);
+            setSyncProgress({
+              stage: 'processing',
+              message: 'Exporting inventory...',
+              current: 0,
+              total: 100,
+            });
+
+            try {
+              const result = await squareExportService.exportInventoryBatch(ingredients);
+
+              setSyncProgress({
+                stage: 'complete',
+                message: 'Export complete!',
+                current: 100,
+                total: 100,
+              });
+
+              if (result.success) {
+                Alert.alert(
+                  'Export Complete!',
+                  `Exported ${result.syncedCount} inventory item(s) to Square.`,
+                  [{ text: 'OK', onPress: () => setShowSyncModal(false) }]
+                );
+              } else {
+                const errorMsg = result.errors.length > 0
+                  ? `Exported ${result.syncedCount}. Errors:\n${result.errors.slice(0, 3).join('\n')}`
+                  : 'Export failed';
+                Alert.alert('Export Issues', errorMsg);
+                setShowSyncModal(false);
+              }
+            } catch (error) {
+              Alert.alert('Error', 'Failed to export inventory. Please try again.');
+              setShowSyncModal(false);
+            } finally {
+              setIsSyncing(false);
+            }
+          },
+        },
+      ]
+    );
+  };
+
   const handleDisconnectPOS = () => {
     Alert.alert(
       'Disconnect from Square',
-      'Are you sure you want to disconnect? Your local data will be preserved.',
+      'Are you sure you want to disconnect? You will need to reconnect to use the app.',
       [
         { text: 'Cancel', style: 'cancel' },
         {
           text: 'Disconnect',
           style: 'destructive',
           onPress: async () => {
-            await squareAuthService.disconnect();
-            setPosConnection({
-              isConnected: false,
-              provider: 'square',
-            });
+            try {
+              await disconnectSquare();
+              // The root layout will automatically redirect to Square onboarding
+            } catch (error) {
+              Alert.alert('Error', 'Failed to disconnect. Please try again.');
+            }
           },
         },
       ]
@@ -152,25 +242,40 @@ export default function SettingsScreen() {
 
   const handleLogout = () => {
     Alert.alert(
-      isGuest ? 'Exit Guest Mode' : 'Log Out',
-      isGuest
-        ? 'Are you sure you want to exit guest mode?'
-        : 'Are you sure you want to log out?',
+      'Log Out',
+      'Are you sure you want to log out?',
       [
         { text: 'Cancel', style: 'cancel' },
         {
-          text: isGuest ? 'Exit' : 'Log Out',
+          text: 'Log Out',
           style: 'destructive',
           onPress: async () => {
             try {
               await signOut();
+              router.replace('/(auth)');
             } catch (error) {
+              console.error('Logout error:', error);
               Alert.alert('Error', 'Failed to log out. Please try again.');
             }
           },
         },
       ]
     );
+  };
+
+  const getSyncModalTitle = () => {
+    switch (syncType) {
+      case 'import_menu':
+        return 'Importing Menu Items';
+      case 'import_inventory':
+        return 'Importing Inventory';
+      case 'export_recipes':
+        return 'Exporting Recipes';
+      case 'export_inventory':
+        return 'Exporting Inventory';
+      default:
+        return 'Syncing with Square';
+    }
   };
 
   const renderSyncModal = () => (
@@ -181,7 +286,7 @@ export default function SettingsScreen() {
             <View style={styles.squareLogoLarge}>
               <Text style={styles.squareLogoTextLarge}>SQ</Text>
             </View>
-            <Text style={styles.modalTitle}>Syncing with Square</Text>
+            <Text style={styles.modalTitle}>{getSyncModalTitle()}</Text>
           </View>
 
           {syncProgress && (
@@ -207,7 +312,7 @@ export default function SettingsScreen() {
     </Modal>
   );
 
-  if (isLoading) {
+  if (squareLoading) {
     return (
       <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
         <View style={styles.loadingContainer}>
@@ -230,84 +335,115 @@ export default function SettingsScreen() {
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>POS Connection</Text>
 
-          {posConnection.isConnected ? (
-            <View style={styles.posCard}>
-              <View style={styles.posHeader}>
-                <View style={styles.posProvider}>
-                  <View style={styles.squareLogo}>
-                    <Text style={styles.squareLogoText}>SQ</Text>
-                  </View>
-                  <View>
-                    <Text style={styles.posProviderName}>Square</Text>
-                    <View style={styles.connectedRow}>
-                      <View style={styles.connectedDot} />
-                      <Text style={styles.connectedLabel}>Connected</Text>
-                    </View>
+          <View style={styles.posCard}>
+            <View style={styles.posHeader}>
+              <View style={styles.posProvider}>
+                <View style={styles.squareLogo}>
+                  <Text style={styles.squareLogoText}>SQ</Text>
+                </View>
+                <View>
+                  <Text style={styles.posProviderName}>Square</Text>
+                  <View style={styles.connectedRow}>
+                    <View style={[styles.connectedDot, !isSquareConnected && styles.disconnectedDot]} />
+                    <Text style={[styles.connectedLabel, !isSquareConnected && styles.disconnectedLabel]}>
+                      {isSquareConnected ? 'Connected' : 'Disconnected'}
+                    </Text>
                   </View>
                 </View>
+              </View>
 
+              <TouchableOpacity
+                style={styles.syncButton}
+                onPress={handleSyncNow}
+                disabled={isSyncing || !isSquareConnected}
+              >
+                {isSyncing ? (
+                  <ActivityIndicator size="small" color="#2196f3" />
+                ) : (
+                  <>
+                    <IconSymbol name="arrow.triangle.2.circlepath" size={18} color="#2196f3" />
+                    <Text style={styles.syncButtonText}>Sync</Text>
+                  </>
+                )}
+              </TouchableOpacity>
+            </View>
+
+            {merchantId && (
+              <View style={styles.merchantInfo}>
+                <IconSymbol name="building.2.fill" size={14} color="#999" />
+                <Text style={styles.merchantText}>
+                  Merchant: {merchantId.substring(0, 12)}...
+                </Text>
+              </View>
+            )}
+
+            <View style={styles.posMeta}>
+              <IconSymbol name="clock.fill" size={14} color="#999" />
+              <Text style={styles.lastSyncText}>
+                Last synced:{' '}
+                {lastSyncedAt
+                  ? lastSyncedAt.toLocaleString('en-US', {
+                      month: 'numeric',
+                      day: 'numeric',
+                      hour: 'numeric',
+                      minute: '2-digit',
+                      hour12: true,
+                    })
+                  : 'Never'}
+              </Text>
+            </View>
+
+            {/* Import/Export Actions */}
+            <View style={styles.syncActionsContainer}>
+              <Text style={styles.syncActionsTitle}>Import from Square</Text>
+              <View style={styles.syncActionsRow}>
                 <TouchableOpacity
-                  style={styles.syncButton}
+                  style={[styles.actionButton, (!isSquareConnected || isSyncing) && styles.actionButtonDisabled]}
                   onPress={handleSyncNow}
-                  disabled={isSyncing}
+                  disabled={isSyncing || !isSquareConnected}
                 >
-                  {isSyncing ? (
-                    <ActivityIndicator size="small" color="#2196f3" />
-                  ) : (
-                    <>
-                      <IconSymbol name="arrow.triangle.2.circlepath" size={18} color="#2196f3" />
-                      <Text style={styles.syncButtonText}>Sync Now</Text>
-                    </>
-                  )}
+                  <IconSymbol name="menucard.fill" size={20} color={isSquareConnected ? "#2196f3" : "#999"} />
+                  <Text style={[styles.actionButtonText, !isSquareConnected && styles.actionButtonTextDisabled]}>Menu Items</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.actionButton, (!isSquareConnected || isSyncing) && styles.actionButtonDisabled]}
+                  onPress={handleImportInventory}
+                  disabled={isSyncing || !isSquareConnected}
+                >
+                  <IconSymbol name="shippingbox.fill" size={20} color={isSquareConnected ? "#2196f3" : "#999"} />
+                  <Text style={[styles.actionButtonText, !isSquareConnected && styles.actionButtonTextDisabled]}>Inventory</Text>
                 </TouchableOpacity>
               </View>
 
-              {posConnection.merchantId && (
-                <View style={styles.merchantInfo}>
-                  <IconSymbol name="building.2.fill" size={14} color="#999" />
-                  <Text style={styles.merchantText}>
-                    Merchant: {posConnection.merchantId.substring(0, 12)}...
+              <Text style={[styles.syncActionsTitle, { marginTop: 16 }]}>Export to Square</Text>
+              <View style={styles.syncActionsRow}>
+                <TouchableOpacity
+                  style={[styles.actionButton, styles.actionButtonExport, (!isSquareConnected || isSyncing) && styles.actionButtonDisabled]}
+                  onPress={handleExportRecipes}
+                  disabled={isSyncing || !isSquareConnected}
+                >
+                  <IconSymbol name="doc.text.fill" size={20} color={isSquareConnected ? "#4caf50" : "#999"} />
+                  <Text style={[styles.actionButtonText, styles.actionButtonTextExport, !isSquareConnected && styles.actionButtonTextDisabled]}>
+                    Recipes ({recipes.filter(r => r.status === 'ready_to_import').length})
                   </Text>
-                </View>
-              )}
-
-              <View style={styles.posMeta}>
-                <IconSymbol name="clock.fill" size={14} color="#999" />
-                <Text style={styles.lastSyncText}>
-                  Last synced:{' '}
-                  {posConnection.lastSyncedAt
-                    ? posConnection.lastSyncedAt.toLocaleString('en-US', {
-                        month: 'numeric',
-                        day: 'numeric',
-                        hour: 'numeric',
-                        minute: '2-digit',
-                        hour12: true,
-                      })
-                    : 'Never'}
-                </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.actionButton, styles.actionButtonExport, (!isSquareConnected || isSyncing) && styles.actionButtonDisabled]}
+                  onPress={handleExportInventory}
+                  disabled={isSyncing || !isSquareConnected}
+                >
+                  <IconSymbol name="arrow.up.doc.fill" size={20} color={isSquareConnected ? "#4caf50" : "#999"} />
+                  <Text style={[styles.actionButtonText, styles.actionButtonTextExport, !isSquareConnected && styles.actionButtonTextDisabled]}>
+                    Inventory ({ingredients.length})
+                  </Text>
+                </TouchableOpacity>
               </View>
-
-              <TouchableOpacity style={styles.disconnectButton} onPress={handleDisconnectPOS}>
-                <Text style={styles.disconnectButtonText}>Disconnect</Text>
-              </TouchableOpacity>
             </View>
-          ) : (
-            <TouchableOpacity
-              style={styles.connectPOSCard}
-              onPress={handleConnectSquare}
-              disabled={isLoading}
-            >
-              <View style={styles.squareLogo}>
-                <Text style={styles.squareLogoText}>SQ</Text>
-              </View>
-              <Text style={styles.connectTitle}>Connect to Square</Text>
-              <Text style={styles.connectText}>Sync your menu items and ingredients</Text>
 
-              <View style={styles.connectButton}>
-                <Text style={styles.connectButtonText}>Connect Account</Text>
-              </View>
+            <TouchableOpacity style={styles.disconnectButton} onPress={handleDisconnectPOS}>
+              <Text style={styles.disconnectButtonText}>Disconnect</Text>
             </TouchableOpacity>
-          )}
+          </View>
         </View>
 
         {/* Account Section */}
@@ -317,16 +453,12 @@ export default function SettingsScreen() {
           {/* User Email Display */}
           {user && (
             <View style={styles.userCard}>
-              <View style={[styles.userAvatar, isGuest && styles.guestAvatar]}>
+              <View style={styles.userAvatar}>
                 <IconSymbol name="person.fill" size={24} color="#fff" />
               </View>
               <View style={styles.userInfo}>
-                <Text style={styles.userEmail}>
-                  {isGuest ? 'Guest User' : user.email}
-                </Text>
-                <Text style={[styles.userLabel, isGuest && styles.guestLabel]}>
-                  {isGuest ? 'Guest mode - data stored locally' : 'Signed in'}
-                </Text>
+                <Text style={styles.userEmail}>{user.email}</Text>
+                <Text style={styles.userLabel}>Signed in</Text>
               </View>
             </View>
           )}
@@ -351,9 +483,7 @@ export default function SettingsScreen() {
 
           <TouchableOpacity style={[styles.settingRow, styles.logoutRow]} onPress={handleLogout}>
             <IconSymbol name="rectangle.portrait.and.arrow.right" size={24} color="#f44336" />
-            <Text style={[styles.settingText, styles.logoutText]}>
-              {isGuest ? 'Exit Guest Mode' : 'Log Out'}
-            </Text>
+            <Text style={[styles.settingText, styles.logoutText]}>Log Out</Text>
           </TouchableOpacity>
         </View>
 
@@ -463,10 +593,16 @@ const styles = StyleSheet.create({
     borderRadius: 4,
     backgroundColor: '#4caf50',
   },
+  disconnectedDot: {
+    backgroundColor: '#f44336',
+  },
   connectedLabel: {
     fontSize: 12,
     color: '#4caf50',
     fontWeight: '600',
+  },
+  disconnectedLabel: {
+    color: '#f44336',
   },
   syncButton: {
     flexDirection: 'row',
@@ -513,38 +649,6 @@ const styles = StyleSheet.create({
     color: '#f44336',
     fontWeight: '600',
   },
-  connectPOSCard: {
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 24,
-    alignItems: 'center',
-    borderWidth: 2,
-    borderStyle: 'dashed',
-    borderColor: '#e0e0e0',
-  },
-  connectTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#333',
-    marginTop: 12,
-  },
-  connectText: {
-    fontSize: 14,
-    color: '#999',
-    marginTop: 4,
-    marginBottom: 20,
-  },
-  connectButton: {
-    backgroundColor: '#000',
-    paddingHorizontal: 24,
-    paddingVertical: 12,
-    borderRadius: 8,
-  },
-  connectButtonText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '600',
-  },
   userCard: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -562,9 +666,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  guestAvatar: {
-    backgroundColor: '#9e9e9e',
-  },
   userInfo: {
     flex: 1,
   },
@@ -577,9 +678,6 @@ const styles = StyleSheet.create({
   userLabel: {
     fontSize: 12,
     color: '#4caf50',
-  },
-  guestLabel: {
-    color: '#ff9800',
   },
   settingRow: {
     flexDirection: 'row',
@@ -650,5 +748,51 @@ const styles = StyleSheet.create({
     color: '#999',
     textAlign: 'center',
     marginTop: 8,
+  },
+  syncActionsContainer: {
+    borderTopWidth: 1,
+    borderTopColor: '#f0f0f0',
+    paddingTop: 16,
+    marginTop: 8,
+    marginBottom: 16,
+  },
+  syncActionsTitle: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#666',
+    marginBottom: 10,
+  },
+  syncActionsRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  actionButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#e3f2fd',
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    gap: 8,
+  },
+  actionButtonExport: {
+    backgroundColor: '#e8f5e9',
+  },
+  actionButtonText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#2196f3',
+  },
+  actionButtonTextExport: {
+    color: '#4caf50',
+  },
+  actionButtonDisabled: {
+    backgroundColor: '#f0f0f0',
+    opacity: 0.6,
+  },
+  actionButtonTextDisabled: {
+    color: '#999',
   },
 });

@@ -12,7 +12,7 @@ import {
   ScrollView,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Link } from 'expo-router';
+import { Link, router } from 'expo-router';
 import { useAuth } from '@/contexts/AuthContext';
 import { useGoogleAuth } from '@/services/auth/google-auth.service';
 import { signInWithApple, isAppleAuthAvailable } from '@/services/auth/apple-auth.service';
@@ -81,6 +81,16 @@ export default function SignUpScreen() {
     try {
       setLoading(true);
       await signUp(email.trim(), password);
+      Alert.alert(
+        'Account Created!',
+        'Your account has been created successfully. Please sign in to continue.',
+        [
+          {
+            text: 'Sign In',
+            onPress: () => router.replace('/(auth)/login'),
+          },
+        ]
+      );
     } catch (error: any) {
       let message = 'Failed to create account';
       if (error.code === 'auth/email-already-in-use') {

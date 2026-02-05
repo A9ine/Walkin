@@ -1,7 +1,7 @@
-import type { Recipe, Ingredient } from '@/types/recipe';
 import type { POSIngredient } from '@/types/pos';
+import type { Recipe } from '@/types/recipe';
+import { squareAuthService } from './square-auth.service';
 
-const SQUARE_ACCESS_TOKEN = process.env.EXPO_PUBLIC_SQUARE_ACCESS_TOKEN || '';
 const SQUARE_API_BASE = 'https://connect.squareup.com/v2';
 
 export interface ExportResult {
@@ -70,24 +70,27 @@ export interface SquareModifierList {
  * Handles exporting recipes to Square Catalog with inventory tracking
  */
 export class SquareExportService {
-  private accessToken: string;
-
-  constructor(accessToken?: string) {
-    this.accessToken = accessToken || SQUARE_ACCESS_TOKEN;
+  /**
+   * Get access token from auth service
+   */
+  private async getAccessToken(): Promise<string | null> {
+    return squareAuthService.getAccessToken();
   }
 
   /**
-   * Check if Square API is configured
+   * Check if Square API is configured (user is authenticated)
    */
-  isConfigured(): boolean {
-    return Boolean(this.accessToken);
+  async isConfigured(): Promise<boolean> {
+    const token = await this.getAccessToken();
+    return Boolean(token);
   }
 
   /**
    * Sync POS ingredients to Square as trackable inventory items
    */
   async syncIngredientsToSquare(ingredients: POSIngredient[]): Promise<SyncResult> {
-    if (!this.isConfigured()) {
+    const accessToken = await this.getAccessToken();
+    if (!accessToken) {
       return {
         success: false,
         syncedCount: 0,
@@ -125,7 +128,7 @@ export class SquareExportService {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            Authorization: `Bearer ${this.accessToken}`,
+            Authorization: `Bearer ${accessToken}`,
             'Square-Version': '2024-01-18',
           },
           body: JSON.stringify({
@@ -158,7 +161,8 @@ export class SquareExportService {
    * Note: Full automatic inventory deduction requires Square for Restaurants
    */
   async exportRecipe(recipe: Recipe): Promise<ExportResult> {
-    if (!this.isConfigured()) {
+    const accessToken = await this.getAccessToken();
+    if (!accessToken) {
       return {
         success: false,
         error: 'Square access token not configured',
@@ -199,7 +203,7 @@ export class SquareExportService {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${this.accessToken}`,
+          Authorization: `Bearer ${accessToken}`,
           'Square-Version': '2024-01-18',
         },
         body: JSON.stringify({
@@ -292,6 +296,133 @@ export class SquareExportService {
     }
 
     return rows.map((row) => row.join(',')).join('\n');
+  }
+
+  /**
+   * Export multiple recipes to Square as menu items
+   */
+  async exportRecipes(
+    recipes: Recipe[],
+    onProgress?: (current: number, total: number, recipeName: string) => void
+  ): Promise<SyncResult> {
+    const accessToken = await this.getAccessToken();
+    if (!accessToken) {
+      return {
+        success: false,
+        syncedCount: 0,
+        errors: ['Square access token not configured'],
+      };
+    }
+
+    const errors: string[] = [];
+    let syncedCount = 0;
+    const total = recipes.length;
+
+    for (let i = 0; i < recipes.length; i++) {
+      const recipe = recipes[i];
+      onProgress?.(i + 1, total, recipe.name);
+
+      const result = await this.exportRecipe(recipe);
+      if (result.success) {
+        syncedCount++;
+      } else {
+        errors.push(`${recipe.name}: ${result.error}`);
+      }
+    }
+
+    return {
+      success: errors.length === 0,
+      syncedCount,
+      errors,
+    };
+  }
+
+  /**
+   * Export inventory/ingredients to Square using batch upsert
+   */
+  async exportInventoryBatch(ingredients: POSIngredient[]): Promise<SyncResult> {
+    const accessToken = await this.getAccessToken();
+    if (!accessToken) {
+      return {
+        success: false,
+        syncedCount: 0,
+        errors: ['Square access token not configured'],
+      };
+    }
+
+    if (ingredients.length === 0) {
+      return {
+        success: true,
+        syncedCount: 0,
+        errors: [],
+      };
+    }
+
+    try {
+      // Square batch upsert supports up to 1000 objects per request
+      const batchSize = 1000;
+      const errors: string[] = [];
+      let syncedCount = 0;
+
+      for (let i = 0; i < ingredients.length; i += batchSize) {
+        const batch = ingredients.slice(i, i + batchSize);
+        const objects = batch.map((ingredient) => ({
+          type: 'ITEM' as const,
+          id: `#ingredient_${ingredient.id}`,
+          item_data: {
+            name: ingredient.name,
+            product_type: 'REGULAR' as const,
+            description: `Inventory ingredient: ${ingredient.name}`,
+            variations: [
+              {
+                type: 'ITEM_VARIATION' as const,
+                id: `#variation_${ingredient.id}`,
+                item_variation_data: {
+                  name: ingredient.unit || 'Each',
+                  pricing_type: 'VARIABLE_PRICING' as const,
+                  track_inventory: true,
+                  stockable: true,
+                },
+              },
+            ],
+          },
+        }));
+
+        const response = await fetch(`${SQUARE_API_BASE}/catalog/batch-upsert`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${accessToken}`,
+            'Square-Version': '2024-01-18',
+          },
+          body: JSON.stringify({
+            idempotency_key: `batch_export_${Date.now()}_${i}`,
+            batches: [{ objects }],
+          }),
+        });
+
+        if (!response.ok) {
+          const errorData = await response.json();
+          const errorMsg = errorData.errors?.[0]?.detail || 'Batch export failed';
+          errors.push(`Batch ${Math.floor(i / batchSize) + 1}: ${errorMsg}`);
+        } else {
+          syncedCount += batch.length;
+        }
+      }
+
+      return {
+        success: errors.length === 0,
+        syncedCount,
+        errors,
+      };
+    } catch (error) {
+      console.error('Batch export error:', error);
+      return {
+        success: false,
+        syncedCount: 0,
+        errors: [error instanceof Error ? error.message : 'Batch export failed'],
+      };
+    }
   }
 
   /**

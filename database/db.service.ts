@@ -22,6 +22,9 @@ export class DatabaseService {
       console.log('Initializing database...');
       this.db = await SQLite.openDatabaseAsync('walkin.db');
 
+      // Check if we need to reset schema BEFORE creating tables
+      await this.checkAndResetSchema();
+
       // Create tables
       await this.db.execAsync(SCHEMA.USER_PROFILES);
       await this.db.execAsync(SCHEMA.USER_POS_CONNECTIONS);
@@ -39,7 +42,7 @@ export class DatabaseService {
         await this.db.execAsync(index);
       }
 
-      // Run migrations for existing databases
+      // Run other migrations
       await this.runMigrations();
 
       console.log('Database initialized successfully');
@@ -49,6 +52,52 @@ export class DatabaseService {
     } catch (error) {
       console.error('Failed to initialize database:', error);
       throw error;
+    }
+  }
+
+  /**
+   * Check if old schema exists and reset if needed
+   */
+  private async checkAndResetSchema(): Promise<void> {
+    if (!this.db) return;
+
+    try {
+      // Check if recipes table exists
+      const tables = await this.db.getAllAsync<{ name: string }>(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='recipes'"
+      );
+
+      if (tables.length === 0) {
+        // No existing tables, fresh install
+        return;
+      }
+
+      // Check if recipes table has user_id column
+      const recipesTableInfo = await this.db.getAllAsync<{ name: string }>(
+        "PRAGMA table_info(recipes)"
+      );
+      const hasUserIdInRecipes = recipesTableInfo.some(col => col.name === 'user_id');
+
+      if (!hasUserIdInRecipes) {
+        console.log('Old schema detected. Dropping all tables...');
+
+        // Drop all tables
+        await this.db.execAsync('DROP TABLE IF EXISTS sync_logs');
+        await this.db.execAsync('DROP TABLE IF EXISTS pos_ingredient_units');
+        await this.db.execAsync('DROP TABLE IF EXISTS pos_ingredient_aliases');
+        await this.db.execAsync('DROP TABLE IF EXISTS pos_menu_items');
+        await this.db.execAsync('DROP TABLE IF EXISTS pos_ingredients');
+        await this.db.execAsync('DROP TABLE IF EXISTS recipe_issues');
+        await this.db.execAsync('DROP TABLE IF EXISTS ingredients');
+        await this.db.execAsync('DROP TABLE IF EXISTS recipes');
+        await this.db.execAsync('DROP TABLE IF EXISTS user_pos_connections');
+        await this.db.execAsync('DROP TABLE IF EXISTS user_profiles');
+
+        console.log('Old tables dropped. Will recreate with new schema.');
+      }
+    } catch (error) {
+      console.error('Schema check error:', error);
+      // If check fails, try to continue anyway
     }
   }
 

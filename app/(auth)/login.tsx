@@ -12,7 +12,7 @@ import {
   ScrollView,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Link } from 'expo-router';
+import { Link, router } from 'expo-router';
 import { useAuth } from '@/contexts/AuthContext';
 import { useGoogleAuth } from '@/services/auth/google-auth.service';
 import { signInWithApple, isAppleAuthAvailable } from '@/services/auth/apple-auth.service';
@@ -45,6 +45,7 @@ export default function LoginScreen() {
     try {
       setLoading(true);
       await signInWithGoogle(idToken, accessToken);
+      router.replace('/(tabs)/inbox');
     } catch (error: any) {
       Alert.alert('Error', error.message || 'Failed to sign in with Google');
     } finally {
@@ -61,6 +62,7 @@ export default function LoginScreen() {
     try {
       setLoading(true);
       await signIn(email.trim(), password);
+      router.replace('/(tabs)/inbox');
     } catch (error: any) {
       let message = 'Failed to sign in';
       if (error.code === 'auth/user-not-found') {
@@ -71,6 +73,8 @@ export default function LoginScreen() {
         message = 'Invalid email address';
       } else if (error.code === 'auth/too-many-requests') {
         message = 'Too many failed attempts. Please try again later';
+      } else if (error.code === 'auth/invalid-credential') {
+        message = 'Invalid email or password';
       }
       Alert.alert('Error', message);
     } finally {
@@ -91,6 +95,7 @@ export default function LoginScreen() {
       setLoading(true);
       const result = await signInWithApple();
       await firebaseAppleSignIn(result.identityToken, result.nonce);
+      router.replace('/(tabs)/inbox');
     } catch (error: any) {
       if (error.code !== 'ERR_REQUEST_CANCELED') {
         Alert.alert('Error', error.message || 'Failed to sign in with Apple');
@@ -215,7 +220,10 @@ export default function LoginScreen() {
 
           <TouchableOpacity
             style={styles.guestButton}
-            onPress={continueAsGuest}
+            onPress={() => {
+              continueAsGuest();
+              router.replace('/(tabs)/inbox');
+            }}
             disabled={loading}
           >
             <Text style={styles.guestButtonText}>Continue as Guest</Text>

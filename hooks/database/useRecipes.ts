@@ -1,16 +1,23 @@
 import { useState, useEffect, useCallback } from 'react';
 import type { Recipe } from '@/types/recipe';
 import { recipeRepository } from '@/database/repositories/recipe.repository';
+import { useAuth } from '@/contexts/AuthContext';
 
 export function useRecipes() {
+  const { user } = useAuth();
   const [recipes, setRecipes] = useState<Recipe[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
 
   const loadRecipes = useCallback(async () => {
+    if (!user?.uid) {
+      setRecipes([]);
+      setLoading(false);
+      return;
+    }
     try {
       setLoading(true);
-      const allRecipes = await recipeRepository.getAllRecipes();
+      const allRecipes = await recipeRepository.getAllRecipes(user.uid);
       setRecipes(allRecipes);
       setError(null);
     } catch (err) {
@@ -19,21 +26,22 @@ export function useRecipes() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [user?.uid]);
 
   useEffect(() => {
     loadRecipes();
   }, [loadRecipes]);
 
   const saveRecipe = useCallback(async (recipe: Recipe) => {
+    if (!user?.uid) throw new Error('User not authenticated');
     try {
-      await recipeRepository.saveRecipe(recipe);
+      await recipeRepository.saveRecipe(recipe, user.uid);
       await loadRecipes(); // Reload after save
     } catch (err) {
       console.error('Failed to save recipe:', err);
       throw err;
     }
-  }, [loadRecipes]);
+  }, [loadRecipes, user?.uid]);
 
   const deleteRecipe = useCallback(async (id: string) => {
     try {

@@ -1,0 +1,8 @@
+# Compiled JavaScript files
+lib/
+
+# Dependency directories
+node_modules/
+
+# Local configuration
+.env.local

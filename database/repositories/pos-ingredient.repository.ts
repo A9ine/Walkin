@@ -3,13 +3,14 @@ import { db } from '../db.service';
 
 export class POSIngredientRepository {
   /**
-   * Get all POS ingredients
+   * Get all POS ingredients for a user
    */
-  async getAllIngredients(): Promise<POSIngredient[]> {
+  async getAllIngredients(userId: string): Promise<POSIngredient[]> {
     const database = db.getDB();
 
     const rows = await database.getAllAsync<any>(
-      'SELECT * FROM pos_ingredients ORDER BY name ASC'
+      'SELECT * FROM pos_ingredients WHERE user_id = ? ORDER BY name ASC',
+      [userId]
     );
 
     const ingredients: POSIngredient[] = [];
@@ -23,13 +24,14 @@ export class POSIngredientRepository {
   }
 
   /**
-   * Get active ingredients only
+   * Get active ingredients only for a user
    */
-  async getActiveIngredients(): Promise<POSIngredient[]> {
+  async getActiveIngredients(userId: string): Promise<POSIngredient[]> {
     const database = db.getDB();
 
     const rows = await database.getAllAsync<any>(
-      'SELECT * FROM pos_ingredients WHERE is_active = 1 ORDER BY name ASC'
+      'SELECT * FROM pos_ingredients WHERE user_id = ? AND is_active = 1 ORDER BY name ASC',
+      [userId]
     );
 
     const ingredients: POSIngredient[] = [];
@@ -59,9 +61,9 @@ export class POSIngredientRepository {
   }
 
   /**
-   * Create new ingredient
+   * Create new ingredient for a user
    */
-  async createIngredient(ingredient: Omit<POSIngredient, 'usedInRecipes'>): Promise<void> {
+  async createIngredient(ingredient: Omit<POSIngredient, 'usedInRecipes'>, userId: string): Promise<void> {
     const database = db.getDB();
     const now = Date.now();
 
@@ -70,10 +72,11 @@ export class POSIngredientRepository {
 
       // Insert ingredient
       await database.runAsync(
-        `INSERT INTO pos_ingredients (id, name, unit, pack_size, pos_id, is_active, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO pos_ingredients (id, user_id, name, unit, pack_size, pos_id, is_active, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           ingredient.id,
+          userId,
           ingredient.name,
           ingredient.unit,
           ingredient.packSize || null,

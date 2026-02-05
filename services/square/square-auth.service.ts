@@ -1,8 +1,12 @@
-import * as AuthSession from 'expo-auth-session';
-import * as WebBrowser from 'expo-web-browser';
+import { app } from '@/config/firebase';
 import * as SecureStore from 'expo-secure-store';
+import * as WebBrowser from 'expo-web-browser';
+import { getFunctions, httpsCallable } from 'firebase/functions';
 
 WebBrowser.maybeCompleteAuthSession();
+
+// Initialize Firebase Functions
+const functions = getFunctions(app);
 
 // Square OAuth Configuration
 const SQUARE_APP_ID = process.env.EXPO_PUBLIC_SQUARE_APP_ID || '';
@@ -42,13 +46,18 @@ export interface SquareTokens {
  * Square OAuth Authentication Service
  */
 class SquareAuthService {
-  private redirectUri: string;
+  // HTTPS URL for Square (they require HTTPS)
+  private squareRedirectUri: string = 'https://walkin-ab27f.web.app/square-callback.html';
+  // Custom scheme URL that the app listens for
+  private appCallbackUri: string = 'bubbletea://square-callback';
 
   constructor() {
-    this.redirectUri = AuthSession.makeRedirectUri({
-      scheme: 'bubbletea',
-      path: 'square-callback',
-    });
+    // redirectUri is what we tell Square (HTTPS required)
+    // The HTML page will redirect to the custom scheme
+  }
+
+  get redirectUri(): string {
+    return this.squareRedirectUri;
   }
 
   /**
@@ -63,7 +72,7 @@ class SquareAuthService {
       state,
       session: 'false',
     });
-
+    console.log(`${SQUARE_OAUTH_BASE}/authorize?${params.toString()}`)
     return `${SQUARE_OAUTH_BASE}/authorize?${params.toString()}`;
   }
 
@@ -84,7 +93,8 @@ class SquareAuthService {
       const authUrl = this.getAuthorizationUrl(state);
 
       // Open the authorization URL in the browser
-      const result = await WebBrowser.openAuthSessionAsync(authUrl, this.redirectUri);
+      // Listen for the custom scheme redirect (HTML page will redirect from HTTPS to this)
+      const result = await WebBrowser.openAuthSessionAsync(authUrl, this.appCallbackUri);
 
       if (result.type !== 'success') {
         return {
@@ -133,43 +143,44 @@ class SquareAuthService {
 
   /**
    * Exchange authorization code for access tokens
-   * Note: In production, this should be done on your backend server
-   * to keep your client secret secure
+   * Uses Firebase Cloud Function to keep client_secret secure
    */
   private async exchangeCodeForTokens(code: string): Promise<SquareAuthResult> {
     try {
-      // For demo purposes, we'll simulate a successful token exchange
-      // In production, you would:
-      // 1. Send the code to your backend server
-      // 2. Your server exchanges the code using the client secret
-      // 3. Your server returns the tokens to the app
+      // Call Firebase Cloud Function to exchange the code
+      const exchangeToken = httpsCallable<
+        { code: string; redirectUri: string },
+        { accessToken: string; refreshToken: string; merchantId: string; expiresAt: string }
+      >(functions, 'exchangeSquareToken');
 
-      // Simulated successful response
-      const mockAccessToken = `sandbox-sq0${code.substring(0, 20)}`;
-      const mockRefreshToken = `refresh-sq0${code.substring(0, 20)}`;
-      const mockMerchantId = 'MERCHANT_' + Math.random().toString(36).substring(7).toUpperCase();
-      const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000); // 30 days
+      const result = await exchangeToken({
+        code,
+        redirectUri: this.redirectUri,
+      });
+
+      const { accessToken, refreshToken, merchantId, expiresAt } = result.data;
+      const expiresAtDate = new Date(expiresAt);
 
       // Store tokens securely
       await this.storeTokens({
-        accessToken: mockAccessToken,
-        refreshToken: mockRefreshToken,
-        merchantId: mockMerchantId,
-        expiresAt,
+        accessToken,
+        refreshToken,
+        merchantId,
+        expiresAt: expiresAtDate,
       });
 
       return {
         success: true,
-        accessToken: mockAccessToken,
-        refreshToken: mockRefreshToken,
-        merchantId: mockMerchantId,
-        expiresAt,
+        accessToken,
+        refreshToken,
+        merchantId,
+        expiresAt: expiresAtDate,
       };
-    } catch (error) {
+    } catch (error: any) {
       console.error('Token exchange error:', error);
       return {
         success: false,
-        error: 'Failed to exchange authorization code for tokens',
+        error: error.message || 'Failed to exchange authorization code for tokens',
       };
     }
   }
@@ -219,27 +230,107 @@ class SquareAuthService {
 
     // Check if token is expired
     if (new Date() > tokens.expiresAt) {
-      // Token expired - would need to refresh
-      return false;
+      // Try to refresh the token
+      const refreshResult = await this.refreshTokens(tokens.refreshToken);
+      return refreshResult.success;
     }
 
     return true;
   }
 
   /**
-   * Get the current access token
+   * Validate the connection by making a test API call to Square
+   * Returns true if the tokens are valid and working
+   */
+  async validateConnection(): Promise<boolean> {
+    try {
+      const accessToken = await this.getAccessToken();
+      if (!accessToken) return false;
+
+      // Make a lightweight API call to verify tokens work
+      const response = await fetch('https://connect.squareup.com/v2/merchants/me', {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+          'Square-Version': '2024-01-18',
+        },
+      });
+
+      if (!response.ok) {
+        console.log('Square connection validation failed:', response.status);
+        // If unauthorized, clear the invalid tokens
+        if (response.status === 401) {
+          await this.disconnect();
+        }
+        return false;
+      }
+
+      return true;
+    } catch (error) {
+      console.error('Error validating Square connection:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Get the current access token, refreshing if expired
    */
   async getAccessToken(): Promise<string | null> {
     const tokens = await this.getStoredTokens();
     if (!tokens) return null;
 
-    // Check if token is expired
-    if (new Date() > tokens.expiresAt) {
-      // In production, refresh the token here
+    // Check if token is expired (with 5 minute buffer)
+    const bufferTime = 5 * 60 * 1000; // 5 minutes
+    if (new Date().getTime() > tokens.expiresAt.getTime() - bufferTime) {
+      // Token expired or expiring soon, try to refresh
+      const refreshResult = await this.refreshTokens(tokens.refreshToken);
+      if (refreshResult.success && refreshResult.accessToken) {
+        return refreshResult.accessToken;
+      }
       return null;
     }
 
     return tokens.accessToken;
+  }
+
+  /**
+   * Refresh access token using refresh token
+   * Uses Firebase Cloud Function to keep client_secret secure
+   */
+  private async refreshTokens(refreshToken: string): Promise<SquareAuthResult> {
+    try {
+      const refreshSquareToken = httpsCallable<
+        { refreshToken: string },
+        { accessToken: string; refreshToken: string; merchantId: string; expiresAt: string }
+      >(functions, 'refreshSquareToken');
+
+      const result = await refreshSquareToken({ refreshToken });
+
+      const { accessToken, refreshToken: newRefreshToken, merchantId, expiresAt } = result.data;
+      const expiresAtDate = new Date(expiresAt);
+
+      // Store new tokens securely
+      await this.storeTokens({
+        accessToken,
+        refreshToken: newRefreshToken,
+        merchantId,
+        expiresAt: expiresAtDate,
+      });
+
+      return {
+        success: true,
+        accessToken,
+        refreshToken: newRefreshToken,
+        merchantId,
+        expiresAt: expiresAtDate,
+      };
+    } catch (error: any) {
+      console.error('Token refresh error:', error);
+      return {
+        success: false,
+        error: error.message || 'Failed to refresh token',
+      };
+    }
   }
 
   /**
