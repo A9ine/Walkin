@@ -1,4 +1,5 @@
 import { IconSymbol } from '@/components/ui/icon-symbol';
+import { useAuth } from '@/contexts/AuthContext';
 import { recipeRepository } from '@/database/repositories/recipe.repository';
 import { usePOSIngredients } from '@/hooks/database/usePOSIngredients';
 import { importRecipeFromImage } from '@/services/api/recipe-import.api';
@@ -28,6 +29,7 @@ interface SelectedImage {
 
 export default function ImportScreen() {
   const router = useRouter();
+  const { user } = useAuth();
   const { ingredients: posIngredients } = usePOSIngredients();
   const [isProcessing, setIsProcessing] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -190,7 +192,8 @@ export default function ImportScreen() {
         }
 
         setProgressMessage('Saving to database...');
-        await recipeRepository.saveRecipe(result.recipe);
+        if (!user?.uid) throw new Error('User not authenticated');
+        await recipeRepository.saveRecipe(result.recipe, user.uid);
       } else {
         // Use mock data (current behavior)
         await simulateProgress('Extracting text from image...', 30);
@@ -231,7 +234,8 @@ export default function ImportScreen() {
           issues: [],
         };
 
-        await recipeRepository.saveRecipe(mockRecipe);
+        if (!user?.uid) throw new Error('User not authenticated');
+        await recipeRepository.saveRecipe(mockRecipe, user.uid);
       }
 
       setProgressMessage('Recipe import complete!');
@@ -367,7 +371,8 @@ export default function ImportScreen() {
         ],
       };
 
-      await recipeRepository.saveRecipe(mockRecipe);
+      if (!user?.uid) throw new Error('User not authenticated');
+      await recipeRepository.saveRecipe(mockRecipe, user.uid);
       setProgress(100);
       setProgressMessage('Recipe import complete!');
 
@@ -489,7 +494,8 @@ export default function ImportScreen() {
           })),
       };
 
-      await recipeRepository.saveRecipe(recipe);
+      if (!user?.uid) throw new Error('User not authenticated');
+      await recipeRepository.saveRecipe(recipe, user.uid);
       setProgress(100);
       setProgressMessage('Recipe import complete!');
 

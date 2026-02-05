@@ -1,10 +1,11 @@
 import { IconSymbol } from '@/components/ui/icon-symbol';
+import { useAuth } from '@/contexts/AuthContext';
 import { DatabaseService } from '@/database/db.service';
 import { recipeRepository } from '@/database/repositories/recipe.repository';
 import { usePOSIngredients } from '@/hooks/database/usePOSIngredients';
 import type { Recipe } from '@/types/recipe';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -31,6 +32,7 @@ interface EditableIngredient {
 export default function MenuItemDetailScreen() {
   const { menuItemId } = useLocalSearchParams<{ menuItemId: string }>();
   const router = useRouter();
+  const { user } = useAuth();
   const { ingredients: posIngredients } = usePOSIngredients();
 
   const [loading, setLoading] = useState(true);
@@ -136,12 +138,17 @@ export default function MenuItemDetailScreen() {
         issues: [],
       };
 
+      if (!user?.uid) {
+        Alert.alert('Error', 'You must be logged in to save recipes');
+        return;
+      }
+
       if (recipe) {
         // Update existing recipe
-        await recipeRepository.saveRecipe(updatedRecipe);
+        await recipeRepository.saveRecipe(updatedRecipe, user.uid);
       } else {
         // Create new recipe
-        await recipeRepository.saveRecipe(updatedRecipe);
+        await recipeRepository.saveRecipe(updatedRecipe, user.uid);
 
         // Link to menu item
         const db = DatabaseService.getInstance().getDB();

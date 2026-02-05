@@ -115,8 +115,9 @@ export default function SquareOnboardingScreen() {
   };
 
   const handleContinueToApp = () => {
+    // Just close the modal - expo-router will automatically navigate to (tabs)
+    // because isInitialSyncComplete is now true, making needsSquareOnboarding false
     setShowSyncModal(false);
-    router.replace('/(tabs)/inbox');
   };
 
   const handleLogout = async () => {
