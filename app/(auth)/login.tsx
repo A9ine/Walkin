@@ -1,22 +1,23 @@
-import React, { useState, useEffect } from 'react';
+import { IconSymbol } from '@/components/ui/icon-symbol';
+import { useAuth } from '@/contexts/AuthContext';
+import { useSquareAuth } from '@/contexts/SquareAuthContext';
+import { isAppleAuthAvailable, signInWithApple } from '@/services/auth/apple-auth.service';
+import { useGoogleAuth } from '@/services/auth/google-auth.service';
+import { Link, router } from 'expo-router';
+import React, { useEffect, useRef, useState } from 'react';
 import {
-  View,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  StyleSheet,
-  Alert,
   ActivityIndicator,
+  Alert,
   KeyboardAvoidingView,
   Platform,
   ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Link, router } from 'expo-router';
-import { useAuth } from '@/contexts/AuthContext';
-import { useGoogleAuth } from '@/services/auth/google-auth.service';
-import { signInWithApple, isAppleAuthAvailable } from '@/services/auth/apple-auth.service';
-import { IconSymbol } from '@/components/ui/icon-symbol';
 
 export default function LoginScreen() {
   const [email, setEmail] = useState('');
@@ -24,13 +25,34 @@ export default function LoginScreen() {
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [appleAuthAvailable, setAppleAuthAvailable] = useState(false);
+  const isSigningIn = useRef(false);
 
-  const { signIn, signInWithGoogle, signInWithApple: firebaseAppleSignIn, continueAsGuest } = useAuth();
+  const { user, isGuest, signIn, signInWithGoogle, signInWithApple: firebaseAppleSignIn, continueAsGuest } = useAuth();
+  const { isSquareConnected, isInitialSyncComplete, isLoading: squareLoading } = useSquareAuth();
   const { response, promptAsync, isReady } = useGoogleAuth();
 
   useEffect(() => {
     isAppleAuthAvailable().then(setAppleAuthAvailable);
   }, []);
+
+  // Navigate when user state changes AND square auth check is complete
+  useEffect(() => {
+    if (user && isSigningIn.current && !squareLoading) {
+      isSigningIn.current = false;
+      
+      // Determine correct destination based on Square auth status
+      if (isGuest) {
+        // Guest users skip Square onboarding
+        router.replace('/(tabs)/inbox');
+      } else if (!isSquareConnected || !isInitialSyncComplete) {
+        // Non-guest users need Square onboarding
+        router.replace('/(square-onboarding)');
+      } else {
+        // Fully onboarded users go to main app
+        router.replace('/(tabs)/inbox');
+      }
+    }
+  }, [user, squareLoading, isGuest, isSquareConnected, isInitialSyncComplete]);
 
   useEffect(() => {
     if (response?.type === 'success' && response.authentication) {
@@ -44,9 +66,11 @@ export default function LoginScreen() {
   const handleGoogleSuccess = async (idToken: string, accessToken?: string) => {
     try {
       setLoading(true);
+      isSigningIn.current = true;
       await signInWithGoogle(idToken, accessToken);
-      router.replace('/(tabs)/inbox');
+      // Navigation handled by useEffect watching user state
     } catch (error: any) {
+      isSigningIn.current = false;
       Alert.alert('Error', error.message || 'Failed to sign in with Google');
     } finally {
       setLoading(false);
@@ -61,9 +85,11 @@ export default function LoginScreen() {
 
     try {
       setLoading(true);
+      isSigningIn.current = true;
       await signIn(email.trim(), password);
-      router.replace('/(tabs)/inbox');
+      // Navigation handled by useEffect watching user state
     } catch (error: any) {
+      isSigningIn.current = false;
       let message = 'Failed to sign in';
       if (error.code === 'auth/user-not-found') {
         message = 'No account found with this email';
@@ -93,10 +119,12 @@ export default function LoginScreen() {
   const handleAppleSignIn = async () => {
     try {
       setLoading(true);
+      isSigningIn.current = true;
       const result = await signInWithApple();
       await firebaseAppleSignIn(result.identityToken, result.nonce);
-      router.replace('/(tabs)/inbox');
+      // Navigation handled by useEffect watching user state
     } catch (error: any) {
+      isSigningIn.current = false;
       if (error.code !== 'ERR_REQUEST_CANCELED') {
         Alert.alert('Error', error.message || 'Failed to sign in with Apple');
       }
@@ -221,8 +249,9 @@ export default function LoginScreen() {
           <TouchableOpacity
             style={styles.guestButton}
             onPress={() => {
+              isSigningIn.current = true;
               continueAsGuest();
-              router.replace('/(tabs)/inbox');
+              // Navigation handled by useEffect watching user state
             }}
             disabled={loading}
           >

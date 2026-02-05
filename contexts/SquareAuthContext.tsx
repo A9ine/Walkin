@@ -1,6 +1,7 @@
-import React, { createContext, useContext, useEffect, useState, ReactNode } from 'react';
 import { squareAuthService } from '@/services/square/square-auth.service';
 import * as SecureStore from 'expo-secure-store';
+import React, { createContext, ReactNode, useContext, useEffect, useState } from 'react';
+import { useAuth } from './AuthContext';
 
 const SQUARE_INITIAL_SYNC_KEY = 'square_initial_sync_complete';
 
@@ -24,16 +25,44 @@ interface SquareAuthProviderProps {
 export function SquareAuthProvider({ children }: SquareAuthProviderProps) {
   const [isSquareConnected, setIsSquareConnected] = useState(false);
   const [isInitialSyncComplete, setIsInitialSyncComplete] = useState(false);
-  const [isLoading, setIsLoading] = useState(true);
+  const [isCheckingStatus, setIsCheckingStatus] = useState(true); // Start as true
   const [merchantId, setMerchantId] = useState<string | null>(null);
+  const { user, isGuest, loading: authLoading } = useAuth();
+  // Track which user we've verified Square status for
+  const [verifiedUserId, setVerifiedUserId] = useState<string | null>(null);
 
+  const currentUserId = user?.uid || null;
+
+  // Compute loading state: we're loading if auth is loading, or if we have a user
+  // that we haven't verified Square status for yet, or if we're actively checking
+  const needsVerification = !authLoading && currentUserId && !isGuest && verifiedUserId !== currentUserId;
+  // Only count isCheckingStatus if there's actually a user to check for
+  const isLoading = authLoading || !!needsVerification || !!(currentUserId && !isGuest && isCheckingStatus);
+
+  // Re-check Square status when user changes
   useEffect(() => {
-    checkSquareStatus();
-  }, []);
+    // Wait for auth to finish loading before making decisions
+    if (authLoading) return;
 
-  const checkSquareStatus = async () => {
+    // If user logged out or is guest, reset Square state
+    if (!currentUserId || isGuest) {
+      setIsSquareConnected(false);
+      setIsInitialSyncComplete(false);
+      setMerchantId(null);
+      setVerifiedUserId(null);
+      setIsCheckingStatus(false);
+      return;
+    }
+
+    // User logged in but not yet verified - check their Square status
+    if (verifiedUserId !== currentUserId) {
+      checkSquareStatus(currentUserId);
+    }
+  }, [currentUserId, isGuest, authLoading, verifiedUserId]);
+
+  const checkSquareStatus = async (userId: string) => {
     try {
-      setIsLoading(true);
+      setIsCheckingStatus(true);
 
       // First check if tokens exist locally
       const isAuthenticated = await squareAuthService.isAuthenticated();
@@ -70,7 +99,9 @@ export function SquareAuthProvider({ children }: SquareAuthProviderProps) {
       setMerchantId(null);
       setIsInitialSyncComplete(false);
     } finally {
-      setIsLoading(false);
+      // Mark this user as verified and stop checking
+      setVerifiedUserId(userId);
+      setIsCheckingStatus(false);
     }
   };
 
@@ -122,7 +153,9 @@ export function SquareAuthProvider({ children }: SquareAuthProviderProps) {
   };
 
   const refreshConnectionStatus = async (): Promise<void> => {
-    await checkSquareStatus();
+    if (currentUserId) {
+      await checkSquareStatus(currentUserId);
+    }
   };
 
   const value: SquareAuthContextType = {

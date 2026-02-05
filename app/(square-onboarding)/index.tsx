@@ -1,19 +1,19 @@
+import { IconSymbol } from '@/components/ui/icon-symbol';
+import { useAuth } from '@/contexts/AuthContext';
+import { useSquareAuth } from '@/contexts/SquareAuthContext';
+import { squareImportService, type ImportProgress } from '@/services/square/square-import.service';
+import { router } from 'expo-router';
 import React, { useState } from 'react';
 import {
-  View,
-  Text,
-  TouchableOpacity,
-  StyleSheet,
   ActivityIndicator,
   Alert,
   Modal,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { router } from 'expo-router';
-import { useSquareAuth } from '@/contexts/SquareAuthContext';
-import { useAuth } from '@/contexts/AuthContext';
-import { squareImportService, type ImportProgress } from '@/services/square/square-import.service';
-import { IconSymbol } from '@/components/ui/icon-symbol';
 
 type OnboardingStep = 'connect' | 'sync' | 'complete';
 

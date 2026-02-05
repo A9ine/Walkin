@@ -1,4 +1,5 @@
-import { Redirect } from 'expo-router';
+import { router } from 'expo-router';
+import { useEffect } from 'react';
 import { View, ActivityIndicator, StyleSheet } from 'react-native';
 import { useAuth } from '@/contexts/AuthContext';
 import { useSquareAuth } from '@/contexts/SquareAuthContext';
@@ -9,27 +10,33 @@ export default function Index() {
   const { user, loading: authLoading, isGuest } = useAuth();
   const { isSquareConnected, isInitialSyncComplete, isLoading: squareLoading } = useSquareAuth();
 
-  // Show loading while checking auth state
-  if (!dbReady || authLoading || squareLoading) {
-    return (
-      <View style={styles.container}>
-        <ActivityIndicator size="large" color="#2196f3" />
-      </View>
-    );
-  }
+  const isLoading = !dbReady || authLoading || squareLoading;
 
-  // Not logged in -> go to auth
-  if (!user) {
-    return <Redirect href="/(auth)" />;
-  }
+  useEffect(() => {
+    if (isLoading) return;
 
-  // Logged in but needs Square onboarding (non-guest users only)
-  if (!isGuest && (!isSquareConnected || !isInitialSyncComplete)) {
-    return <Redirect href="/(square-onboarding)" />;
-  }
+    // Not logged in -> go to auth
+    if (!user) {
+      router.replace('/(auth)');
+      return;
+    }
 
-  // Logged in and ready -> go to main app
-  return <Redirect href="/(tabs)/inbox" />;
+    // Logged in but needs Square onboarding (non-guest users only)
+    if (!isGuest && (!isSquareConnected || !isInitialSyncComplete)) {
+      router.replace('/(square-onboarding)');
+      return;
+    }
+
+    // Logged in and ready -> go to main app
+    router.replace('/(tabs)/inbox');
+  }, [isLoading, user, isGuest, isSquareConnected, isInitialSyncComplete]);
+
+  // Always show loading while determining where to navigate
+  return (
+    <View style={styles.container}>
+      <ActivityIndicator size="large" color="#2196f3" />
+    </View>
+  );
 }
 
 const styles = StyleSheet.create({
