@@ -74,7 +74,7 @@ export class RecipeRepository {
       // After successful save, try to link recipe to menu item
       // Don't throw if this fails - recipe is already saved
       try {
-        await linkRecipeToMenuItem(recipe);
+        await linkRecipeToMenuItem(recipe, userId);
       } catch (linkError) {
         console.error('Recipe saved but failed to link to menu item:', linkError);
         // Don't throw - the recipe was saved successfully

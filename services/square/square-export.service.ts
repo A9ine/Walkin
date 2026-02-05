@@ -21,7 +21,7 @@ export interface SquareCatalogItem {
   id?: string;
   item_data: {
     name: string;
-    product_type: 'FOOD' | 'REGULAR';
+    product_type: 'FOOD_AND_BEV' | 'REGULAR';
     description?: string;
     variations?: Array<{
       type: 'ITEM_VARIATION';
@@ -185,11 +185,12 @@ export class SquareExportService {
         id: `#recipe_${recipe.id}`,
         item_data: {
           name: recipe.name,
-          product_type: 'FOOD',
+          product_type: 'FOOD_AND_BEV',
           description: `Recipe with ${recipe.ingredients.length} ingredients`,
           variations: [
             {
               type: 'ITEM_VARIATION',
+              id: `#recipe_${recipe.id}_variation`,
               item_variation_data: {
                 name: 'Regular',
                 pricing_type: 'VARIABLE_PRICING',

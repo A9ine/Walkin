@@ -4,7 +4,7 @@ import { DatabaseService } from '@/database/db.service';
  * Utility to sync all recipes to menu items
  * This will create menu items for any recipes that don't have one
  */
-export async function syncRecipesToMenu(): Promise<void> {
+export async function syncRecipesToMenu(userId: string): Promise<void> {
   console.log('\n🔄 Starting recipe-to-menu sync...');
 
   try {
@@ -46,9 +46,9 @@ export async function syncRecipesToMenu(): Promise<void> {
 
       try {
         await db.runAsync(
-          `INSERT INTO pos_menu_items (id, name, category, pos_id, has_recipe, recipe_id, recipe_status, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          [menuItemId, recipe.name, 'Uncategorized', posId, 1, recipe.id, 'mapped', now, now]
+          `INSERT INTO pos_menu_items (id, user_id, name, category, pos_id, has_recipe, recipe_id, recipe_status, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [menuItemId, userId, recipe.name, 'Uncategorized', posId, 1, recipe.id, 'mapped', now, now]
         );
 
         console.log(`✅ Created menu item for recipe: ${recipe.name}`);

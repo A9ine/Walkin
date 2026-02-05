@@ -15,9 +15,11 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { syncRecipesToMenu } from '@/utils/sync-recipes-to-menu';
+import { useAuth } from '@/contexts/AuthContext';
 
 export default function MenuScreen() {
   const router = useRouter();
+  const { user } = useAuth();
   const [searchQuery, setSearchQuery] = useState('');
   const [filterStatus, setFilterStatus] = useState<'all' | 'mapped' | 'review' | 'missing'>('all');
 
@@ -32,8 +34,12 @@ export default function MenuScreen() {
   );
 
   const handleSyncRecipes = async () => {
+    if (!user?.uid) {
+      Alert.alert('Error', 'You must be logged in to sync recipes');
+      return;
+    }
     try {
-      await syncRecipesToMenu();
+      await syncRecipesToMenu(user.uid);
       await loadMenuItems();
       Alert.alert('Success', 'Recipes synced to menu successfully');
     } catch (err) {

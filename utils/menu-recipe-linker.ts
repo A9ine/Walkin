@@ -5,7 +5,7 @@ import type { Recipe } from '@/types/recipe';
  * Automatically link a recipe to a menu item based on name similarity
  * If no matching menu item exists, create a new one
  */
-export async function linkRecipeToMenuItem(recipe: Recipe): Promise<void> {
+export async function linkRecipeToMenuItem(recipe: Recipe, userId: string): Promise<void> {
   console.log(`\n🔗 linkRecipeToMenuItem called for recipe: "${recipe.name}" (ID: ${recipe.id})`);
 
   try {
@@ -54,9 +54,9 @@ export async function linkRecipeToMenuItem(recipe: Recipe): Promise<void> {
 
       try {
         await db.runAsync(
-          `INSERT INTO pos_menu_items (id, name, category, pos_id, has_recipe, recipe_id, recipe_status, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          [menuItemId, recipe.name, 'Uncategorized', posId, 1, recipe.id, 'mapped', now, now]
+          `INSERT INTO pos_menu_items (id, user_id, name, category, pos_id, has_recipe, recipe_id, recipe_status, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [menuItemId, userId, recipe.name, 'Uncategorized', posId, 1, recipe.id, 'mapped', now, now]
         );
 
         console.log(`✅ Created new menu item for recipe "${recipe.name}" with ID ${menuItemId}`);
